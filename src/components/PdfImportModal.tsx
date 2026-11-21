@@ -580,18 +580,33 @@ function analyzeQuestionCrop(
   const inlineOptionRe =
     /(?:^|\s)([A-E])\s*[.)]\s*([\s\S]*?)(?=\s+[A-E]\s*[.)]|$)/g
   const qNumStartRe = /^(?:Soru\s*)?\d{1,2}\s*[.):\-]\s+/i
+  const unitOnlyRe = /^(?:cm|mm|dm|km|kg|gr|lt|ml|sn|dk|sa|br|m|g|l|s|t)$/i
+
+  const isProseOrFormulaLine = (rawText: string) => {
+    const trimmed = rawText.trim()
+    if (!trimmed) return false
+    if (/\?$/.test(trimmed) || qNumStartRe.test(trimmed)) return true
+    if (trimmed.length >= 18 || trimmed.split(/\s+/).length >= 3) return true
+    // Catch 1-2 word Turkish prose continuations like "verilmiştir.", "olduğu biliniyor."
+    const words = trimmed.match(/[a-zA-ZçğıöşüÇĞİÖŞÜ]{3,}/g) ?? []
+    if (words.some((w) => !unitOnlyRe.test(w))) return true
+    // Catch standalone math/set formulas like "s(A) = 9", "A ∩ B = {0, 1, 4, 5, 6}"
+    if (
+      trimmed.length >= 5 &&
+      /[=≠<>≤≥∈∉⊂⊃∪∩{}]/.test(trimmed) &&
+      !/^\s*[A-Z]\s*=\s*\d+\s*°?\s*$/.test(trimmed)
+    ) {
+      return true
+    }
+    return false
+  }
 
   const proseOrOptionLines: typeof lineEntries = []
   const proseOrOptionItems: PageTextSample[] = []
   for (const line of lineEntries) {
     const inlineMatches = Array.from(line.text.matchAll(inlineOptionRe))
     const isOpt = inlineMatches.length >= 2 || optionLineRe.test(line.text)
-    const isQuestionSentence =
-      /\?$/.test(line.text) ||
-      qNumStartRe.test(line.text) ||
-      line.text.length >= 18 ||
-      line.text.split(/\s+/).length >= 3
-    if (isOpt || isQuestionSentence) {
+    if (isOpt || isProseOrFormulaLine(line.text)) {
       proseOrOptionLines.push(line)
       proseOrOptionItems.push(...line.items)
     }
@@ -623,28 +638,71 @@ function analyzeQuestionCrop(
 
     try {
       const img = mCtx.getImageData(0, 0, sw, sh).data
-      let minX = sw
-      let minY = sh
-      let maxX = -1
-      let maxY = -1
-      let inkCount = 0
       const step = 2
+      const rowCounts: { y: number; count: number; minX: number; maxX: number }[] = []
       for (let y = 0; y < sh; y += step) {
+        let rowCount = 0
+        let rMinX = sw
+        let rMaxX = -1
         for (let x = 0; x < sw; x += step) {
           const idx = (y * sw + x) * 4
           if (
             img[idx + 3] > 20 &&
             (img[idx] < 232 || img[idx + 1] < 232 || img[idx + 2] < 232)
           ) {
-            inkCount += 1
-            if (x < minX) minX = x
-            if (x > maxX) maxX = x
-            if (y < minY) minY = y
-            if (y > maxY) maxY = y
+            rowCount += 1
+            if (x < rMinX) rMinX = x
+            if (x > rMaxX) rMaxX = x
+          }
+        }
+        rowCounts.push({ y, count: rowCount, minX: rMinX, maxX: rMaxX })
+      }
+
+      // Group inked rows into vertical graphic bands separated by > 16px blank gaps
+      type Band = { minY: number; maxY: number; minX: number; maxX: number; ink: number }
+      const bands: Band[] = []
+      let currentBand: Band | null = null
+      let emptyRunPx = 0
+
+      for (const row of rowCounts) {
+        if (row.count >= 2) {
+          if (!currentBand) {
+            currentBand = {
+              minY: row.y,
+              maxY: row.y,
+              minX: row.minX,
+              maxX: row.maxX,
+              ink: row.count,
+            }
+          } else {
+            currentBand.maxY = row.y
+            currentBand.minX = Math.min(currentBand.minX, row.minX)
+            currentBand.maxX = Math.max(currentBand.maxX, row.maxX)
+            currentBand.ink += row.count
+          }
+          emptyRunPx = 0
+        } else if (currentBand) {
+          emptyRunPx += step
+          if (emptyRunPx > 16) {
+            bands.push(currentBand)
+            currentBand = null
+            emptyRunPx = 0
           }
         }
       }
-      if (inkCount >= 220 && maxX - minX >= 44 && maxY - minY >= 44) {
+      if (currentBand) bands.push(currentBand)
+
+      // Pick the primary graphic band (tallest/densest band >= 32px high and >= 180 ink samples)
+      const validBands = bands
+        .filter((b) => b.maxX - b.minX >= 44 && b.maxY - b.minY >= 32 && b.ink >= 180)
+        .sort((a, b) => b.ink - a.ink)
+
+      const bestBand = validBands[0]
+      if (bestBand) {
+        const minX = bestBand.minX
+        const maxX = bestBand.maxX
+        const minY = bestBand.minY
+        const maxY = bestBand.maxY
         tightFigureBounds = {
           x1: sx + minX,
           y1: sy + minY,
@@ -652,25 +710,28 @@ function analyzeQuestionCrop(
           y2: sy + maxY,
         }
         const pad = 10
-        const fx = Math.max(0, minX - pad)
-        const fy = Math.max(0, minY - pad)
+        const fx0 = Math.max(0, minX - pad)
+        let fy = Math.max(0, minY - pad)
         const fx2 = Math.min(sw, maxX + pad)
         let fy2 = Math.min(sh, maxY + pad)
 
-        // Only prevent bottom option lines from leaking into the figure's bottom edge
-        for (const line of lineEntries) {
-          const isOpt =
-            Array.from(line.text.matchAll(inlineOptionRe)).length >= 2 ||
-            optionLineRe.test(line.text)
-          if (isOpt && line.y1 - sy > fy + (fy2 - fy) * 0.5) {
-            fy2 = Math.min(fy2, Math.max(fy + 44, line.y1 - sy - 3))
+        // Clamp top/bottom against prose & option lines so surrounding text/formulas never leak into the figure
+        const figCenterY = (minY + maxY) * 0.5
+        for (const line of proseOrOptionLines) {
+          const ly1 = line.y1 - sy
+          const ly2 = line.y2 - sy
+          if (ly2 <= figCenterY && ly2 > fy && ly2 < minY + 4) {
+            fy = Math.max(fy, ly2 + 2)
+          }
+          if (ly1 >= figCenterY && ly1 < fy2 && ly1 > maxY - 4) {
+            fy2 = Math.min(fy2, ly1 - 2)
           }
         }
 
-        const fw = fx2 - fx
+        const fw = fx2 - fx0
         const fh = fy2 - fy
-        if (fw >= 44 && fh >= 44) {
-          figureBounds = { x: sx + fx, y: sy + fy, w: fw, h: fh }
+        if (fw >= 44 && fh >= 32) {
+          figureBounds = { x: sx + fx0, y: sy + fy, w: fw, h: fh }
         }
       }
     } catch {
@@ -719,7 +780,7 @@ function analyzeQuestionCrop(
       continue
     }
 
-    // Any non-option, non-question-sentence line whose center falls inside the tight graphic bounds belongs to the figure
+    // Any non-option, non-prose/formula line whose center falls inside the tight graphic bounds belongs to the figure
     if (tightFigureBounds) {
       const lcx = (line.x1 + line.x2) * 0.5
       const lcy = (line.y1 + line.y2) * 0.5
@@ -728,9 +789,7 @@ function analyzeQuestionCrop(
         lcx <= tightFigureBounds.x2 + 2 &&
         lcy >= tightFigureBounds.y1 - 2 &&
         lcy <= tightFigureBounds.y2 + 2
-      const isClearQuestionSentence =
-        /\?$/.test(text) || qNumStartRe.test(text) || text.length >= 45
-      if (insideTightFig && !isClearQuestionSentence) {
+      if (insideTightFig && !isProseOrFormulaLine(text)) {
         continue
       }
     }
