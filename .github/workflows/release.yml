@@ -399,6 +399,8 @@ jobs:
               <ImplicitUsings>enable</ImplicitUsings>
               <Nullable>enable</Nullable>
               <AssemblyName>SinavAtolyesi</AssemblyName>
+              <AssemblyTitle>S&#x0131;nav At&#x00F6;lyesi</AssemblyTitle>
+              <Product>S&#x0131;nav At&#x00F6;lyesi</Product>
               <ApplicationIcon>AppIcon.ico</ApplicationIcon>
               <PublishSingleFile>true</PublishSingleFile>
               <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
@@ -436,7 +438,7 @@ jobs:
 
               public MainForm()
               {
-                  Text = "Sınav Atölyesi";
+                  Text = "S\u0131nav At\u00f6lyesi";
                   Width = 1360;
                   Height = 860;
                   MinimumSize = new Size(900, 640);

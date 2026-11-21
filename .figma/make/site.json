@@ -1,5 +1,7 @@
 {
-  "description": "Create and customize exam materials, topic explanations, and study resources for students and educators, enhancing learning and preparation efficiency.",
+  "title": "Sınav Atölyesi",
+  "language": "tr",
+  "description": "Öğretmenler için PDF soru ayıklama, optik form, cevap anahtarı ve baskıya hazır sınav kâğıdı hazırlama stüdyosu.",
   "robots": {
     "index": false
   },
