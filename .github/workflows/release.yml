@@ -260,8 +260,9 @@ jobs:
           SWIFT
 
           swiftc -O -target arm64-apple-macos13.0 \
+            -Xlinker -no_adhoc_codesign \
             -framework AppKit -framework Foundation -framework UniformTypeIdentifiers -framework WebKit \
-            build/main.swift -o "$MACOS_DIR/Sınav Atölyesi"
+            build/main.swift -o "$MACOS_DIR/SinavAtolyesi"
 
           RAW_VER="${GITHUB_REF_NAME#v}"
           if [ -z "$RAW_VER" ] || [ "$GITHUB_REF_NAME" = "main" ]; then
@@ -278,7 +279,7 @@ jobs:
             <key>CFBundleDisplayName</key>
             <string>Sınav Atölyesi</string>
             <key>CFBundleExecutable</key>
-            <string>Sınav Atölyesi</string>
+            <string>SinavAtolyesi</string>
             <key>CFBundleIconFile</key>
             <string>AppIcon</string>
             <key>CFBundleIdentifier</key>
@@ -301,7 +302,10 @@ jobs:
           </plist>
           PLIST
 
-          codesign --force --deep --sign - "$APP_DIR"
+          xattr -cr "$APP_DIR"
+          codesign --sign - "$MACOS_DIR/SinavAtolyesi"
+          codesign --force --sign - "$APP_DIR"
+          codesign --verify --verbose=2 "$APP_DIR"
 
       - name: Package macOS ZIP & DMG
         run: |
