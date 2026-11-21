@@ -10,8 +10,8 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    runs-on: macos-latest
+  build-web:
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -33,7 +33,30 @@ jobs:
 
       - name: Package Web artifact
         run: |
-          ditto -c -k --sequesterRsrc --keepParent dist SinavAtolyesi-Web.zip
+          mkdir -p artifacts
+          (cd dist && zip -r ../artifacts/SinavAtolyesi-Web.zip .)
+
+      - name: Upload web dist & zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: |
+            dist/
+            artifacts/SinavAtolyesi-Web.zip
+
+  build-macos:
+    needs: build-web
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download web dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: web-build
 
       - name: Build macOS app icon (.icns)
         run: |
@@ -54,8 +77,8 @@ jobs:
           mkdir -p "$MACOS_DIR" "$RES_DIR/deck" "$RES_DIR/assets"
 
           cp build/AppIcon.icns "$RES_DIR/AppIcon.icns"
-          cp -R dist/assets/* "$RES_DIR/assets/"
-          grep -v 'rel="icon"' dist/index.html > "$RES_DIR/deck/index.html"
+          cp -R web-build/dist/assets/* "$RES_DIR/assets/"
+          grep -v 'rel="icon"' web-build/dist/index.html > "$RES_DIR/deck/index.html"
 
           cat <<'SWIFT' > build/main.swift
           import AppKit
@@ -309,18 +332,196 @@ jobs:
 
       - name: Package macOS ZIP & DMG
         run: |
-          ditto -c -k --sequesterRsrc --keepParent "build/Sınav Atölyesi.app" SinavAtolyesi-macOS-arm64.zip
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent "build/Sınav Atölyesi.app" artifacts/SinavAtolyesi-macOS-arm64.zip
           mkdir -p build/dmg-root
           cp -R "build/Sınav Atölyesi.app" build/dmg-root/
           ln -s /Applications build/dmg-root/Applications
-          hdiutil create -volname "Sınav Atölyesi" -srcfolder build/dmg-root -ov -format UDZO SinavAtolyesi-macOS-arm64.dmg
+          hdiutil create -volname "Sınav Atölyesi" -srcfolder build/dmg-root -ov -format UDZO artifacts/SinavAtolyesi-macOS-arm64.dmg
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: artifacts/
+
+  build-windows:
+    needs: build-web
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Download web dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: web-build
+
+      - name: Build Windows icon (.ico) & native WebView2 host
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path "win-host" | Out-Null
+
+          Add-Type -AssemblyName System.Drawing
+          $src = [System.Drawing.Image]::FromFile((Resolve-Path "public/icon.png"))
+          $bmp = New-Object System.Drawing.Bitmap 256, 256
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+          $g.DrawImage($src, 0, 0, 256, 256)
+          $g.Dispose()
+          $src.Dispose()
+          $ms = New-Object System.IO.MemoryStream
+          $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+          $bmp.Dispose()
+          $png = $ms.ToArray()
+          $fs = [System.IO.File]::Create("win-host/AppIcon.ico")
+          $bw = New-Object System.IO.BinaryWriter($fs)
+          $bw.Write([uint16]0); $bw.Write([uint16]1); $bw.Write([uint16]1)
+          $bw.Write([byte]0); $bw.Write([byte]0); $bw.Write([byte]0); $bw.Write([byte]0)
+          $bw.Write([uint16]1); $bw.Write([uint16]32)
+          $bw.Write([uint32]$png.Length); $bw.Write([uint32]22)
+          $bw.Write($png)
+          $bw.Close(); $fs.Close()
+
+          @'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>WinExe</OutputType>
+              <TargetFramework>net8.0-windows</TargetFramework>
+              <UseWindowsForms>true</UseWindowsForms>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <Nullable>enable</Nullable>
+              <AssemblyName>SinavAtolyesi</AssemblyName>
+              <ApplicationIcon>AppIcon.ico</ApplicationIcon>
+              <PublishSingleFile>true</PublishSingleFile>
+              <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+              <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+            </PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+            </ItemGroup>
+          </Project>
+          '@ | Set-Content -Encoding UTF8 "win-host/SinavAtolyesi.csproj"
+
+          @'
+          using System.Diagnostics;
+          using System.Drawing;
+          using System.IO;
+          using System.Windows.Forms;
+          using Microsoft.Web.WebView2.Core;
+          using Microsoft.Web.WebView2.WinForms;
+
+          namespace SinavAtolyesi;
+
+          internal static class Program
+          {
+              [STAThread]
+              private static void Main()
+              {
+                  ApplicationConfiguration.Initialize();
+                  Application.Run(new MainForm());
+              }
+          }
+
+          internal sealed class MainForm : Form
+          {
+              private readonly WebView2 _webView;
+
+              public MainForm()
+              {
+                  Text = "Sınav Atölyesi";
+                  Width = 1360;
+                  Height = 860;
+                  MinimumSize = new Size(900, 640);
+                  StartPosition = FormStartPosition.CenterScreen;
+
+                  try
+                  {
+                      Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+                  }
+                  catch
+                  {
+                  }
+
+                  _webView = new WebView2 { Dock = DockStyle.Fill };
+                  Controls.Add(_webView);
+                  Load += async (_, _) => await InitializeAsync();
+              }
+
+              private async Task InitializeAsync()
+              {
+                  var userDataDir = Path.Combine(
+                      Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                      "SinavAtolyesi",
+                      "WebView2"
+                  );
+                  Directory.CreateDirectory(userDataDir);
+
+                  var env = await CoreWebView2Environment.CreateAsync(null, userDataDir);
+                  await _webView.EnsureCoreWebView2Async(env);
+
+                  var resourcesDir = Path.Combine(AppContext.BaseDirectory, "resources");
+                  _webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                      "app.sinavatolyesi.local",
+                      resourcesDir,
+                      CoreWebView2HostResourceAccessKind.Allow
+                  );
+
+                  _webView.CoreWebView2.NewWindowRequested += (_, e) =>
+                  {
+                      if (!e.Uri.StartsWith("https://app.sinavatolyesi.local/", StringComparison.OrdinalIgnoreCase))
+                      {
+                          e.Handled = true;
+                          Process.Start(new ProcessStartInfo(e.Uri) { UseShellExecute = true });
+                      }
+                  };
+
+                  _webView.Source = new Uri("https://app.sinavatolyesi.local/deck/index.html");
+              }
+          }
+          '@ | Set-Content -Encoding UTF8 "win-host/Program.cs"
+
+          dotnet publish win-host/SinavAtolyesi.csproj -c Release -r win-x64 --self-contained true -o "build/SinavAtolyesi-win-x64"
+
+          New-Item -ItemType Directory -Force -Path "build/SinavAtolyesi-win-x64/resources/deck", "build/SinavAtolyesi-win-x64/resources/assets" | Out-Null
+          Copy-Item -Recurse -Force "web-build/dist/assets/*" "build/SinavAtolyesi-win-x64/resources/assets/"
+          (Get-Content "web-build/dist/index.html") | Where-Object { $_ -notmatch 'rel="icon"' } | Set-Content -Encoding UTF8 "build/SinavAtolyesi-win-x64/resources/deck/index.html"
+
+          New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
+          Compress-Archive -Path "build/SinavAtolyesi-win-x64/*" -DestinationPath "artifacts/SinavAtolyesi-Windows-x64.zip" -Force
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: artifacts/
+
+  release:
+    needs: [build-web, build-macos, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Gather release files
+        run: |
+          mkdir -p release-files
+          find release-artifacts -type f \( -name "*.dmg" -o -name "*.zip" \) -exec cp {} release-files/ \;
+          ls -lh release-files/
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: |
-            SinavAtolyesi-macOS-arm64.dmg
-            SinavAtolyesi-macOS-arm64.zip
-            SinavAtolyesi-Web.zip
+          files: release-files/*
