@@ -8,6 +8,12 @@ import {
   Trash2,
 } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useState } from "react"
+import {
+  listUserTemplates,
+  saveUserTemplates,
+  syncToExactNativeSqlite,
+  type StoredCustomTemplate,
+} from "../services/db"
 import PageHeader from "./PageHeader"
 
 export const fontOptions = [
@@ -42,11 +48,25 @@ export const fontOptions = [
 export type PaperFont = typeof fontOptions[number]["value"]
 
 export type TemplateDesign = {
-  template: "classic" | "lgs" | "modern" | "minimal" | "elegant" | "bold" | "playful" | "academic"
+  template:
+    | "classic"
+    | "lgs"
+    | "modern"
+    | "minimal"
+    | "elegant"
+    | "bold"
+    | "playful"
+    | "academic"
+    | "tyt"
+    | "quiz"
+    | "stem"
+    | "workbook"
+    | "literature"
+    | "olympiad"
   fontSize: "small" | "normal" | "large"
   spacing: "compact" | "normal" | "relaxed"
   columns: 1 | 2
-  optionLayout: "grid" | "list"
+  optionLayout: "grid" | "inline" | "list"
   accent: string
   showSchoolHeader: boolean
   showStudentBox: boolean
@@ -57,14 +77,31 @@ export type TemplateDesign = {
   watermarkText: string
   watermarkOpacity: number
   fontFamily: PaperFont
-  pageBorder: "none" | "thin" | "double"
-  numberStyle: "plain" | "circle" | "box"
+  pageBorder:
+    | "none"
+    | "thin"
+    | "double"
+    | "rounded"
+    | "dashed"
+    | "corners"
+    | "topBottom"
+  paperBackground?: "white" | "cream" | "grid" | "dots" | "lined" | "softTint"
+  numberStyle:
+    | "plain"
+    | "circle"
+    | "outlineCircle"
+    | "box"
+    | "outlineBox"
+    | "pill"
+    | "paren"
+    | "underline"
+    | "ribbon"
   dividers: boolean
   logoSize: "small" | "medium" | "large"
   /** Page margin in millimetres (A4 = 210 mm wide). */
   margin: number
-  /** Per-question score grid on the last page. */
-  showScoreTable: boolean
+  /** Vertical gap between questions in pixels. */
+  questionGap?: number
   /** Teacher name and signature line on the last page. */
   showSignature: boolean
   /** Booklet type badge (LGS style A / B). */
@@ -97,12 +134,12 @@ export const baseDesign: TemplateDesign = {
   watermarkOpacity: 7,
   fontFamily: "sans",
   pageBorder: "none",
+  paperBackground: "white",
   numberStyle: "plain",
   dividers: false,
   logoSize: "medium",
   margin: 15,
-  showScoreTable: true,
-  showSignature: true,
+  showSignature: false,
   booklet: "none",
 }
 
@@ -117,7 +154,7 @@ const templates: TemplateItem[] = [
     features: [
       "Dönem ve yazılı numaralı başlık",
       "Ad/No/Sınıf tablosu ve puan kutusu",
-      "Soru bazlı puan tablosu, öğretmen imzası",
+      "Öğretmen imza alanı",
     ],
     design: base,
   },
@@ -139,7 +176,6 @@ const templates: TemplateItem[] = [
       spacing: "compact",
       optionLayout: "list",
       showPoints: false,
-      showScoreTable: false,
       showSignature: false,
       booklet: "A",
       footerNote: "Başarılar dileriz.",
@@ -162,7 +198,6 @@ const templates: TemplateItem[] = [
       spacing: "relaxed",
       showSchoolHeader: false,
       showPoints: false,
-      showScoreTable: false,
       showSignature: false,
       accent: "#126b57",
       footerNote: "Kolay gelsin!",
@@ -239,9 +274,127 @@ const templates: TemplateItem[] = [
       spacing: "relaxed",
       numberStyle: "circle",
       accent: "#c2410c",
-      showScoreTable: false,
       showSignature: false,
       footerNote: "Harikasın!",
+    },
+  },
+  {
+    id: "tyt",
+    name: "YKS / Deneme kitapçığı",
+    category: "Test",
+    description: "Merkezi deneme sınavı düzeninde keskin çift sütunlu test.",
+    features: [
+      "Oturum ve kitapçık üst bandı",
+      "Çift sütunlu kompakt yerleşim",
+      "Kutu içinde soru numaraları",
+    ],
+    design: {
+      ...base,
+      template: "tyt",
+      columns: 2,
+      fontSize: "small",
+      spacing: "compact",
+      optionLayout: "list",
+      numberStyle: "box",
+      accent: "#1d4ed8",
+      booklet: "A",
+      showSignature: false,
+    },
+  },
+  {
+    id: "quiz",
+    name: "Hızlı kısa sınav (Quiz)",
+    category: "Test",
+    description: "10–15 dakikalık ders içi değerlendirmeler için kompakt şablon.",
+    features: [
+      "Tek satırda kompakt öğrenci bilgisi",
+      "Süre ve puan rozeti",
+      "Sıkı satır aralığıyla tek sayfaya sığar",
+    ],
+    design: {
+      ...base,
+      template: "quiz",
+      fontSize: "small",
+      spacing: "compact",
+      accent: "#0e7490",
+      numberStyle: "circle",
+      showSignature: false,
+    },
+  },
+  {
+    id: "stem",
+    name: "Fen / STEM teknik",
+    category: "Yazılı",
+    description: "Matematik, fizik ve fen bilimleri için teknik ızgara başlığı.",
+    features: [
+      "Sol vurgu şeritli teknik başlık",
+      "Formül ve bilgi kutularına uyumlu",
+      "Net soru ayırıcı çizgiler",
+    ],
+    design: {
+      ...base,
+      template: "stem",
+      dividers: true,
+      accent: "#126b57",
+      fontFamily: "firaSans",
+    },
+  },
+  {
+    id: "workbook",
+    name: "Çalışma fasikülü",
+    category: "Çalışma kâğıdı",
+    description: "Ödev, tekrar ve konu kavrama föyleri için çerçeveli düzen.",
+    features: [
+      "İnce sayfa çerçevesi",
+      "Geniş satır aralığı ve yazma alanı",
+      "Konu odaklı başlık kartı",
+    ],
+    design: {
+      ...base,
+      template: "workbook",
+      spacing: "relaxed",
+      accent: "#7c3aed",
+      showSignature: false,
+      footerNote: "Evde tekrar etmeyi unutma.",
+    },
+  },
+  {
+    id: "literature",
+    name: "Edebiyat / Sözel",
+    category: "Yazılı",
+    description: "Türkçe, edebiyat ve sosyal bilimler için okuma dostu tasarım.",
+    features: [
+      "Kitap amblemli editöryal başlık",
+      "Serif yazı tipi ve rahat okuma aralığı",
+      "Alıntı ve metin bloklarına uyumlu düzen",
+    ],
+    design: {
+      ...base,
+      template: "literature",
+      fontFamily: "serif",
+      spacing: "relaxed",
+      accent: "#9a3412",
+      dividers: true,
+    },
+  },
+  {
+    id: "olympiad",
+    name: "Olimpiyat / Seçme",
+    category: "Test",
+    description: "Proje, yarışma ve üst düzey deneme sınavları için prestijli düzen.",
+    features: [
+      "Madalya amblemli çift çizgili başlık",
+      "Çift sütunlu keskin yerleşim",
+      "İnce sayfa çerçevesi",
+    ],
+    design: {
+      ...base,
+      template: "olympiad",
+      columns: 2,
+      pageBorder: "thin",
+      accent: "#b45309",
+      numberStyle: "box",
+      booklet: "A",
     },
   },
 ]
@@ -258,11 +411,13 @@ const fontLabels = Object.fromEntries(
 ) as Record<PaperFont, string>
 const STORAGE_KEY = "sinav-atolyesi-sablonlarim"
 
-const loadCustom = (): TemplateItem[] => {
+const loadCustom = (userId?: string): TemplateItem[] => {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]")
+    const parsed = userId
+      ? listUserTemplates(userId)
+      : JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]")
     return Array.isArray(parsed)
-      ? parsed.map((item: TemplateItem) => ({
+      ? parsed.map((item: TemplateItem | StoredCustomTemplate) => ({
           ...item,
           design: { ...baseDesign, ...item.design },
         }))
@@ -273,6 +428,7 @@ const loadCustom = (): TemplateItem[] => {
 }
 
 type TemplatesPageProps = {
+  userId?: string
   onMenu: () => void
   current: TemplateDesign
   onUse: (design: TemplateDesign, name: string) => void
@@ -290,6 +446,7 @@ type Draft = {
 }
 
 export default function TemplatesPage({
+  userId,
   onMenu,
   current,
   onUse,
@@ -298,16 +455,25 @@ export default function TemplatesPage({
 }: TemplatesPageProps) {
   const [search, setSearch] = useState("")
   const [category, setCategory] = useState<typeof categories[number]>("Tümü")
-  const [custom, setCustom] = useState<TemplateItem[]>(loadCustom)
+  const [custom, setCustom] = useState<TemplateItem[]>(() => loadCustom(userId))
   const [draft, setDraft] = useState<Draft | null>(null)
 
   useEffect(() => {
+    setCustom(loadCustom(userId))
+  }, [userId])
+
+  useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(custom))
+      if (userId) {
+        saveUserTemplates(userId, custom)
+      } else {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(custom))
+        syncToExactNativeSqlite()
+      }
     } catch {
       // Storage may be full (large logos); keep templates in memory.
     }
-  }, [custom])
+  }, [custom, userId])
 
   const all = useMemo(() => [...custom, ...templates], [custom])
 

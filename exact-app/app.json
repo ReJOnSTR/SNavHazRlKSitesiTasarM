@@ -1,0 +1,33 @@
+{
+  "host": {
+    "web": {},
+    "macos": {
+      "minimumOS": "14.0",
+      "window": {
+        "width": 1360,
+        "height": 860
+      }
+    }
+  },
+  "deploy": {
+    "store": {
+      "macos": "0"
+    }
+  },
+  "name": "Sınav Atölyesi",
+  "short_name": "Sınav Atölyesi",
+  "id": "com.sinavatolyesi.exact",
+  "start_url": "/",
+  "display": "standalone",
+  "icons": [
+    {
+      "src": "assets/icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png"
+    }
+  ],
+  "app": {
+    "id": "com.sinavatolyesi.exact",
+    "name": "Sınav Atölyesi"
+  }
+}

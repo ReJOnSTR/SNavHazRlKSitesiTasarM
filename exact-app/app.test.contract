@@ -1,0 +1,5 @@
+test "web design studio frame and SQLite database initialize"
+  expect tree has "root"
+  expect tree has "studio-frame"
+  clock data
+  expect state dbReady.ok == true

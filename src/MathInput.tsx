@@ -1,12 +1,10 @@
 import { Sigma } from "lucide-react"
 import { useEffect, useRef, useState, type ReactNode } from "react"
 
-// Lightweight math notation: [a/b] fraction, x^2 / x^{10} superscript,
-// a_1 / a_{12} subscript, √{x} square root.
+// Lightweight math & inline style notation: [a/b] fraction, x^2 / x^{10} superscript,
+// a_1 / a_{12} subscript, √{x} square root, **bold**, {#rrggbb|colored text}.
 export const mathPattern =
-  /\[([^[\]/]+)\/([^[\]]+)\]|\^(\{[^}]*\}|[^\s{])|_(\{[^}]*\}|[^\s{_])|√\{([^}]*)\}/g
-
-const hasMath = (text: string) => new RegExp(mathPattern.source).test(text)
+  /\{(#[0-9a-fA-F]{6})\|([^}]+)\}|\*\*([^*]+)\*\*|\[([^[\]/]+)\/([^[\]]+)\]|\^(\{[^}]*\}|[^\s{])|_(\{[^}]*\}|[^\s{_])|√\{([^}]*)\}/g
 
 export function MathText({ text }: { text: string }) {
   const parts: ReactNode[] = []
@@ -16,21 +14,33 @@ export function MathText({ text }: { text: string }) {
   for (const match of text.matchAll(mathPattern)) {
     const index = match.index ?? 0
     if (index > last) parts.push(text.slice(last, index))
-    if (match[1] !== undefined) {
+    if (match[1] !== undefined && match[2] !== undefined) {
       parts.push(
-        <span className="frac" key={index}>
-          <span>{match[1].trim()}</span>
-          <span>{match[2].trim()}</span>
+        <span key={index} style={{ color: match[1] }}>
+          <MathText text={match[2]} />
         </span>,
       )
     } else if (match[3] !== undefined) {
-      parts.push(<sup key={index}>{strip(match[3])}</sup>)
+      parts.push(
+        <strong key={index}>
+          <MathText text={match[3]} />
+        </strong>,
+      )
     } else if (match[4] !== undefined) {
-      parts.push(<sub key={index}>{strip(match[4])}</sub>)
-    } else if (match[5] !== undefined) {
+      parts.push(
+        <span className="frac" key={index}>
+          <span>{match[4].trim()}</span>
+          <span>{match[5].trim()}</span>
+        </span>,
+      )
+    } else if (match[6] !== undefined) {
+      parts.push(<sup key={index}>{strip(match[6])}</sup>)
+    } else if (match[7] !== undefined) {
+      parts.push(<sub key={index}>{strip(match[7])}</sub>)
+    } else if (match[8] !== undefined) {
       parts.push(
         <span className="sqrt" key={index}>
-          √<span>{match[5]}</span>
+          √<span>{match[8]}</span>
         </span>,
       )
     }
@@ -111,7 +121,19 @@ const symbolItems: Item[] = [
   sym("β", "Beta", "beta"),
   sym("θ", "Teta", "teta"),
   sym("∑", "Toplam", "toplam sigma"),
+  sym("Δ", "Delta", "delta fark"),
+  sym("Ω", "Ohm", "ohm omega"),
+  sym("∈", "Elemanıdır", "eleman kume küme"),
+  sym("∉", "Elemanı değildir", "eleman degil kume küme"),
+  sym("∪", "Birleşim", "birlesim birleşim kume"),
+  sym("∩", "Kesişim", "kesisim kesişim kume"),
+  sym("⊂", "Alt küme", "alt kume küme"),
+  sym("∅", "Boş küme", "bos kume küme"),
+  sym("≡", "Denktir", "denk denktir"),
+  sym("∼", "Benzer", "benzer benzerlik"),
   sym("→", "Ok", "ok sag sağ"),
+  sym("⇒", "İse", "ise gerektirme ok"),
+  sym("⇔", "Ancak ve ancak", "ancak cift ok"),
 ]
 
 const allItems = [...structures, ...symbolItems]
@@ -375,15 +397,6 @@ export default function MathInput({
           <kbd>/</kbd> hızlı ekle
         </span>
       </div>
-
-      {hasMath(value) && (
-        <div className="math-preview" aria-live="polite">
-          <span>Görünüm</span>
-          <div>
-            <MathText text={value} />
-          </div>
-        </div>
-      )}
     </div>
   )
 }

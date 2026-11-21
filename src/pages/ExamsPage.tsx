@@ -9,42 +9,43 @@ import {
   UploadCloud,
 } from "lucide-react"
 import { useMemo, useState } from "react"
+import { isContentType } from "../data/examDefaults"
+import type { StoredExam } from "../services/db"
 import PageHeader from "./PageHeader"
 
 type ExamStatus = "Taslak" | "Hazır" | "Yazdırıldı"
-
-type ExamItem = {
-  id: number
-  title: string
-  grade: string
-  topic: string
-  questions: number
-  points: number
-  status: ExamStatus
-  updated: string
-}
-
-const initialExams: ExamItem[] = [
-  { id: 1, title: "7. Sınıf Matematik — Oran ve Orantı", grade: "7/A", topic: "Oran ve Orantı", questions: 4, points: 80, status: "Taslak", updated: "Bugün" },
-  { id: 2, title: "7/B Tam Sayılarla İşlemler Yazılısı", grade: "7/B", topic: "Tam Sayılar", questions: 12, points: 100, status: "Hazır", updated: "Dün" },
-  { id: 3, title: "Rasyonel Sayılar Kısa Sınav", grade: "7/A", topic: "Rasyonel Sayılar", questions: 8, points: 50, status: "Yazdırıldı", updated: "12 Mayıs" },
-  { id: 4, title: "Cebirsel İfadeler Çalışma Kâğıdı", grade: "7/C", topic: "Cebirsel İfadeler", questions: 10, points: 100, status: "Hazır", updated: "8 Mayıs" },
-  { id: 5, title: "Eşitlik ve Denklem — 2. Dönem 1. Yazılı", grade: "7/A", topic: "Denklemler", questions: 15, points: 100, status: "Yazdırıldı", updated: "29 Nisan" },
-  { id: 6, title: "Yüzdeler Tekrar Testi", grade: "7/B", topic: "Yüzdeler", questions: 20, points: 100, status: "Taslak", updated: "22 Nisan" },
-]
-
 const filters: ("Tümü" | ExamStatus)[] = ["Tümü", "Taslak", "Hazır", "Yazdırıldı"]
 
 type ExamsPageProps = {
+  exams: StoredExam[]
   onMenu: () => void
-  onOpen: () => void
+  onOpen: (id: string) => void
   onNew: () => void
+  onDuplicate: (id: string) => void
+  onDelete: (id: string) => void
   onPdf: () => void
   onNotify: (message: string) => void
 }
 
-export default function ExamsPage({ onMenu, onOpen, onNew, onPdf, onNotify }: ExamsPageProps) {
-  const [exams, setExams] = useState(initialExams)
+function formatDate(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ""
+  return new Intl.DateTimeFormat("tr-TR", {
+    day: "numeric",
+    month: "short",
+  }).format(date)
+}
+
+export default function ExamsPage({
+  exams,
+  onMenu,
+  onOpen,
+  onNew,
+  onDuplicate,
+  onDelete,
+  onPdf,
+  onNotify,
+}: ExamsPageProps) {
   const [search, setSearch] = useState("")
   const [filter, setFilter] = useState<(typeof filters)[number]>("Tümü")
   const [layout, setLayout] = useState<"grid" | "list">("grid")
@@ -55,20 +56,11 @@ export default function ExamsPage({ onMenu, onOpen, onNew, onPdf, onNotify }: Ex
       (exam) =>
         (filter === "Tümü" || exam.status === filter) &&
         (!query ||
-          `${exam.title} ${exam.topic} ${exam.grade}`.toLocaleLowerCase("tr").includes(query)),
+          `${exam.examMeta.title} ${exam.examMeta.topic} ${exam.examMeta.grade}`
+            .toLocaleLowerCase("tr")
+            .includes(query)),
     )
   }, [exams, search, filter])
-
-  const duplicate = (exam: ExamItem) => {
-    const id = Math.max(...exams.map((item) => item.id)) + 1
-    setExams([{ ...exam, id, title: `${exam.title} (kopya)`, status: "Taslak", updated: "Şimdi" }, ...exams])
-    onNotify("Sınav kopyalandı")
-  }
-
-  const remove = (id: number) => {
-    setExams(exams.filter((exam) => exam.id !== id))
-    onNotify("Sınav silindi")
-  }
 
   return (
     <div className="home-view">
@@ -107,16 +99,28 @@ export default function ExamsPage({ onMenu, onOpen, onNew, onPdf, onNotify }: Ex
               >
                 {item}
                 <span>
-                  {item === "Tümü" ? exams.length : exams.filter((exam) => exam.status === item).length}
+                  {item === "Tümü"
+                    ? exams.length
+                    : exams.filter((exam) => exam.status === item).length}
                 </span>
               </button>
             ))}
           </div>
           <div className="layout-toggle">
-            <button className={layout === "grid" ? "active" : ""} type="button" aria-label="Kart görünümü" onClick={() => setLayout("grid")}>
+            <button
+              className={layout === "grid" ? "active" : ""}
+              type="button"
+              aria-label="Kart görünümü"
+              onClick={() => setLayout("grid")}
+            >
               <LayoutGrid size={16} />
             </button>
-            <button className={layout === "list" ? "active" : ""} type="button" aria-label="Liste görünümü" onClick={() => setLayout("list")}>
+            <button
+              className={layout === "list" ? "active" : ""}
+              type="button"
+              aria-label="Liste görünümü"
+              onClick={() => setLayout("list")}
+            >
               <List size={16} />
             </button>
           </div>
@@ -125,45 +129,83 @@ export default function ExamsPage({ onMenu, onOpen, onNew, onPdf, onNotify }: Ex
         {visible.length === 0 ? (
           <div className="page-empty">
             <FileText size={28} />
-            <strong>Sonuç bulunamadı</strong>
-            <span>Arama veya filtreyi değiştirmeyi dene.</span>
+            <strong>
+              {exams.length === 0 ? "Henüz kayıtlı sınavın yok" : "Sonuç bulunamadı"}
+            </strong>
+            <span>
+              {exams.length === 0
+                ? "Yeni sınav oluşturarak başlayabilirsin."
+                : "Arama veya filtreyi değiştirmeyi dene."}
+            </span>
           </div>
         ) : (
           <div className={layout === "grid" ? "exam-grid" : "exam-list"}>
-            {visible.map((exam) => (
-              <article className="exam-card" key={exam.id}>
-                <button className="exam-card-main" type="button" onClick={onOpen}>
-                  <span className="exam-thumb" aria-hidden="true">
-                    <i />
-                    <i />
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                  <span className="exam-card-text">
-                    <span className={`status status-${exam.status}`}>{exam.status}</span>
-                    <strong>{exam.title}</strong>
-                    <small>
-                      {exam.grade} · {exam.questions} soru · {exam.points} puan
-                    </small>
-                  </span>
-                </button>
-                <footer>
-                  <span>Güncellendi: {exam.updated}</span>
-                  <div>
-                    <button type="button" aria-label="Yazdır" onClick={() => onNotify("Yazdırma için sınavı açın")}>
-                      <Printer size={15} />
-                    </button>
-                    <button type="button" aria-label="Kopyala" onClick={() => duplicate(exam)}>
-                      <Copy size={15} />
-                    </button>
-                    <button className="danger" type="button" aria-label="Sil" onClick={() => remove(exam.id)}>
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
-                </footer>
-              </article>
-            ))}
+            {visible.map((exam) => {
+              const qCount = exam.questions.filter(
+                (q) => !isContentType(q.type),
+              ).length
+              const pts = exam.questions.reduce(
+                (s, q) => (isContentType(q.type) ? s : s + q.points),
+                0,
+              )
+              return (
+                <article className="exam-card" key={exam.id}>
+                  <button
+                    className="exam-card-main"
+                    type="button"
+                    onClick={() => onOpen(exam.id)}
+                  >
+                    <span className="exam-thumb" aria-hidden="true">
+                      <i />
+                      <i />
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                    <span className="exam-card-text">
+                      <span className={`status status-${exam.status}`}>
+                        {exam.status}
+                      </span>
+                      <strong>{exam.examMeta.title || "İsimsiz sınav"}</strong>
+                      <small>
+                        {exam.examMeta.grade || "Sınıf yok"} · {qCount} soru ·{" "}
+                        {pts} puan
+                      </small>
+                    </span>
+                  </button>
+                  <footer>
+                    <span>Güncellendi: {formatDate(exam.updatedAt)}</span>
+                    <div>
+                      <button
+                        type="button"
+                        aria-label="Yazdır"
+                        onClick={() => {
+                          onOpen(exam.id)
+                          onNotify("Yazdırmak için üstteki Yazdır butonunu kullanın")
+                        }}
+                      >
+                        <Printer size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Kopyala"
+                        onClick={() => onDuplicate(exam.id)}
+                      >
+                        <Copy size={15} />
+                      </button>
+                      <button
+                        className="danger"
+                        type="button"
+                        aria-label="Sil"
+                        onClick={() => onDelete(exam.id)}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </footer>
+                </article>
+              )
+            })}
           </div>
         )}
       </div>

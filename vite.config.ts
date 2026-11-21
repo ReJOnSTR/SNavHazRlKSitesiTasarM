@@ -34,6 +34,13 @@ react(),
       host: process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0',
       port: parseInt(process.env.PORT || '8443'),
       strictPort: true,
+      proxy: {
+        '/api/ollama': {
+          target: 'http://127.0.0.1:11434',
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/api\/ollama/, ''),
+        },
+      },
       watch: {
         ignored: [
           '**/.figma/**',

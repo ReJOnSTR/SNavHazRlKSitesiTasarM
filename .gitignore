@@ -19,3 +19,9 @@ logs/
 # beside it.
 /.plugins/
 /.opencode-skills/
+exact-app/.exact/
+exact-app/target/
+exact-app/deck/
+exact-app/assets/*.js
+exact-app/assets/*.mjs
+exact-app/assets/*.css

@@ -1,0 +1,19 @@
+shape Reply
+  ok: bool
+  error: string
+
+component App
+  state frameLoaded = false
+
+  resource dbReady = initDb() as shape Reply else empty()
+  mutation syncReply as shape Reply refreshes dbReady
+
+  action onFrameLoad()
+    frameLoaded = true
+
+  action onFrameMessage(payload: string)
+    send syncReply = syncFromWeb(payload)
+
+  view
+    main testId="root" width="100%" height="100%" display="flex" flex-direction="column" overflow="hidden"
+      iframe id="studio" src="/deck/index.html" width="100%" height="100%" flex=1 load=onFrameLoad message=onFrameMessage testId="studio-frame"
