@@ -13010,3 +13010,19 @@ body {
 .pdf-field-action:hover {
   background: var(--accent-soft, rgba(16, 185, 129, 0.12));
 }
+
+.pdf-edit-field .math-input,
+.pdf-edit-opt-row .math-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.pdf-no-text-hint {
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+  font-size: 10.5px;
+  line-height: 1.4;
+}

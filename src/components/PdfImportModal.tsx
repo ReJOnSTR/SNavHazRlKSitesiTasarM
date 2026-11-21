@@ -45,6 +45,7 @@ type CroppedQuestionItem = {
   optionLayout?: "inherit" | "grid" | "inline" | "list"
   figureImage?: string
   figureWidth?: number
+  noTextLayer?: boolean
 }
 
 type PageTextSample = {
@@ -549,6 +550,7 @@ function analyzeQuestionCrop(
   optionLayout?: "inherit" | "grid" | "inline" | "list"
   figureImage?: string
   figureWidth?: number
+  noTextLayer?: boolean
 } {
   if (insideSamples.length === 0) {
     return { mode: "image", parsedType: "none", prompt: "" }
@@ -666,9 +668,9 @@ function analyzeQuestionCrop(
   const medianFontPx =
     fontList.length > 0 ? fontList[Math.floor(fontList.length / 2)] : 12
 
-  const optionLineRe = /^([A-E])\s*[.)]\s*(.+)/
+  const optionLineRe = /^\(?([A-E])\s*[.):\-]\s*(.+)/
   const inlineOptionRe =
-    /(?:^|\s)([A-E])\s*[.)]\s*([\s\S]*?)(?=\s+[A-E]\s*[.)]|$)/g
+    /(?:^|\s)\(?([A-E])\s*[.)]\s*([\s\S]*?)(?=\s+\(?[A-E]\s*[.)]|$)/g
   const qNumStartRe = /^(?:Soru\s*)?\d{1,2}\s*[.):\-]\s+/i
   const unitOnlyRe = /^(?:cm|mm|dm|km|kg|gr|lt|ml|sn|dk|sa|br|m|g|l|s|t)$/i
 
@@ -680,10 +682,11 @@ function analyzeQuestionCrop(
     // Catch 1-2 word Turkish prose continuations like "verilmiştir.", "olduğu biliniyor."
     const words = trimmed.match(/[a-zA-ZçğıöşüÇĞİÖŞÜ]{3,}/g) ?? []
     if (words.some((w) => !unitOnlyRe.test(w))) return true
-    // Catch standalone math/set formulas like "s(A) = 9", "A ∩ B = {0, 1, 4, 5, 6}"
+    // Catch standalone math/set formulas like "s(A) = 9", "A ∩ B = {0, 1, 4, 5, 6}", "x^2 + y^2"
     if (
-      trimmed.length >= 5 &&
-      /[=≠<>≤≥∈∉⊂⊃∪∩{}]/.test(trimmed) &&
+      trimmed.length >= 4 &&
+      (/[=≠<>≤≥∈∉⊂⊃∪∩{}]/.test(trimmed) ||
+        (/[+\-×·÷√^_]/.test(trimmed) && /[0-9a-zA-Z]/.test(trimmed))) &&
       !/^\s*[A-Z]\s*=\s*\d+\s*°?\s*$/.test(trimmed)
     ) {
       return true
@@ -1564,6 +1567,7 @@ export default function PdfImportModal({
         optionLayout: analyzed.optionLayout,
         figureImage: analyzed.figureImage,
         figureWidth: analyzed.figureWidth,
+        noTextLayer: insideSamples.length === 0,
       },
     ])
     setEditingItemId(newId)
@@ -2343,6 +2347,11 @@ export default function PdfImportModal({
                           )
                         ) : (
                           <div className="pdf-split-preview">
+                            {item.noTextLayer && (
+                              <p className="pdf-no-text-hint">
+                                Bu PDF sayfası görsel/taranmış formatta (seçilebilir metin katmanı yok). Soru doğrudan görsel olarak eklenecek; istersen Düzenle ile metin ve şıkları yazabilirsin.
+                              </p>
+                            )}
                             <div className="pdf-crop-thumb">
                               <img
                                 src={item.fullImage}
