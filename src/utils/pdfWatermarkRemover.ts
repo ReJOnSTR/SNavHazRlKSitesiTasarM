@@ -43,11 +43,86 @@ function collectLowOpacityStates(
     if (!stateDict) continue
     const ca = stateDict.lookupMaybe(PDFName.of("ca"), PDFNumber)?.asNumber()
     const CA = stateDict.lookupMaybe(PDFName.of("CA"), PDFNumber)?.asNumber()
-    if ((ca !== undefined && ca < 0.72) || (CA !== undefined && CA < 0.72)) {
+    if ((ca !== undefined && ca < 0.45) || (CA !== undefined && CA < 0.45)) {
       lowAlphaNames.add(key.asString().replace(/^\//, ""))
     }
   }
   return lowAlphaNames
+}
+
+/**
+ * Scan PDF content stream outside literal `(...)` and hex `<...>` strings
+ * to find matching `openWord ... closeWord` blocks safely.
+ */
+function replacePdfBlocks(
+  input: string,
+  openWord: string,
+  closeWord: string,
+  onBlock: (full: string, inner: string) => string,
+): string {
+  const isWordChar = (ch: string) => /[A-Za-z0-9_.*+-]/.test(ch)
+  const matchesAt = (pos: number, word: string) => {
+    if (!input.startsWith(word, pos)) return false
+    const before = pos > 0 ? input[pos - 1] : " "
+    const after = pos + word.length < input.length ? input[pos + word.length] : " "
+    return !isWordChar(before) && !isWordChar(after)
+  }
+
+  let out = ""
+  let cursor = 0
+  let i = 0
+  const stack: number[] = []
+
+  while (i < input.length) {
+    const ch = input[i]
+    if (ch === "(") {
+      i += 1
+      let depth = 1
+      while (i < input.length && depth > 0) {
+        if (input[i] === "\\") {
+          i += 2
+          continue
+        }
+        if (input[i] === "(") depth += 1
+        else if (input[i] === ")") depth -= 1
+        i += 1
+      }
+      continue
+    }
+    if (ch === "<" && input[i + 1] !== "<") {
+      i += 1
+      while (i < input.length && input[i] !== ">") i += 1
+      i += 1
+      continue
+    }
+    if (ch === "%") {
+      while (i < input.length && input[i] !== "\n" && input[i] !== "\r") i += 1
+      continue
+    }
+
+    if (matchesAt(i, openWord)) {
+      stack.push(i)
+      i += openWord.length
+      continue
+    }
+    if (matchesAt(i, closeWord) && stack.length > 0) {
+      const start = stack.pop()!
+      const end = i + closeWord.length
+      if (stack.length === 0) {
+        out += input.slice(cursor, start)
+        const full = input.slice(start, end)
+        const inner = input.slice(start + openWord.length, i)
+        out += onBlock(full, inner)
+        cursor = end
+      }
+      i = end
+      continue
+    }
+    i += 1
+  }
+
+  out += input.slice(cursor)
+  return out
 }
 
 function stripWatermarkOperators(
@@ -57,42 +132,82 @@ function stripWatermarkOperators(
   let removedCount = 0
   let out = content
 
-  // 1. Remove rotated BT ... ET text blocks (e.g. diagonal ÖSYM / copyright / draft text)
+  // 1. Remove rotated BT ... ET text blocks ONLY when large-scale or low-opacity (preserves small rotated chart/axis labels)
   const tmRe =
     /(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+Tm\b/
-  out = out.replace(/BT[\s\S]*?ET/g, (block) => {
-    const m = block.match(tmRe)
+  const tfRe = /\/\S+\s+(-?\d+(?:\.\d+)?)\s+Tf\b/
+  const gsRe = /\/([A-Za-z0-9_.-]+)\s+gs\b/g
+
+  out = replacePdfBlocks(out, "BT", "ET", (full) => {
+    const m = full.match(tmRe)
     if (m) {
       const a = Number(m[1])
       const b = Number(m[2])
       const c = Number(m[3])
       const d = Number(m[4])
       if (isRotatedMatrix(a, b, c, d)) {
-        removedCount += 1
-        return ""
+        const tmScale = Math.max(Math.hypot(a, b), Math.hypot(c, d))
+        const tfMatch = full.match(tfRe)
+        const tfSize = tfMatch ? Number(tfMatch[1]) : 1
+        const effectiveSize = tmScale * tfSize
+        let hasLowAlpha = false
+        for (const gsMatch of full.matchAll(gsRe)) {
+          if (lowAlphaNames.has(gsMatch[1])) {
+            hasLowAlpha = true
+            break
+          }
+        }
+        if (effectiveSize >= 16 || hasLowAlpha) {
+          removedCount += 1
+          return ""
+        }
       }
     }
-    return block
+    return full
   })
 
-  // 2. Remove q ... Q blocks that use rotated cm + text OR low-opacity ExtGState
+  // 2. Remove q ... Q blocks that use low-opacity ExtGState (< 0.45) OR rotated cm paired with text/XObject
   const cmRe =
     /(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+cm\b/g
-  const gsRe = /\/([A-Za-z0-9_.-]+)\s+gs\b/g
 
-  // Iteratively strip innermost q ... Q watermark blocks
   let prev = ""
   while (prev !== out) {
     prev = out
-    out = out.replace(/q\b((?:(?!\bq\b)[\s\S])*?)\bQ/g, (full, inner: string) => {
-      // Check low-opacity graphics state
+    out = replacePdfBlocks(out, "q", "Q", (full, inner) => {
+      if (/\bq\b/.test(inner)) {
+        // Recurse inside nested q ... Q blocks first so outer blocks aren't falsely stripped
+        const innerCleaned = replacePdfBlocks(inner, "q", "Q", (nFull, nInner) => {
+          for (const gsMatch of nInner.matchAll(gsRe)) {
+            if (lowAlphaNames.has(gsMatch[1])) {
+              removedCount += 1
+              return ""
+            }
+          }
+          if (/\b(?:Tj|TJ|Do)\b/.test(nInner)) {
+            for (const cmMatch of nInner.matchAll(cmRe)) {
+              const a = Number(cmMatch[1])
+              const b = Number(cmMatch[2])
+              const c = Number(cmMatch[3])
+              const d = Number(cmMatch[4])
+              if (isRotatedMatrix(a, b, c, d)) {
+                removedCount += 1
+                return ""
+              }
+            }
+          }
+          return nFull
+        })
+        if (innerCleaned !== inner) {
+          return `q${innerCleaned}Q`
+        }
+      }
+
       for (const gsMatch of inner.matchAll(gsRe)) {
         if (lowAlphaNames.has(gsMatch[1])) {
           removedCount += 1
           return ""
         }
       }
-      // Check rotated cm paired with text or XObject Do
       if (/\b(?:Tj|TJ|Do)\b/.test(inner)) {
         for (const cmMatch of inner.matchAll(cmRe)) {
           const a = Number(cmMatch[1])

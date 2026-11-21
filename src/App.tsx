@@ -28,13 +28,11 @@ import {
   Sun,
   Undo2,
   UploadCloud,
-  Users,
   X,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import AuthView from "./components/AuthView"
 import ExamPaper from "./components/ExamPaper"
-import GradingModal from "./components/GradingModal"
 import HomeView from "./components/HomeView"
 import SettingsPage from "./pages/SettingsPage"
 import {
@@ -89,7 +87,6 @@ import type {
   Question,
   QuestionType,
   SavedPdfEntry,
-  StudentGrade,
 } from "./types/exam"
 import {
   exportExamDocx,
@@ -169,8 +166,6 @@ export default function App() {
   )
 
   const [selectedQuestionId, setSelectedQuestionId] = useState<number | null>(null)
-  const [grades, setGrades] = useState<StudentGrade[]>([])
-  const [gradingOpen, setGradingOpen] = useState(false)
   const [dualBookletPayload, setDualBookletPayload] = useState<{
     questionsA: Question[]
     questionsB: Question[]
@@ -203,7 +198,6 @@ export default function App() {
         },
         questions,
         design,
-        grades,
         updatedAt: new Date().toISOString(),
       }
       saveUserExam(draftExam)
@@ -221,7 +215,6 @@ export default function App() {
       examMeta,
       questions,
       design,
-      grades,
       updatedAt: new Date().toISOString(),
     }
     saveUserExam(updated)
@@ -229,7 +222,7 @@ export default function App() {
       prev.map((item) => (item.id === activeExamId ? updated : item)),
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [examMeta, questions, design, grades])
+  }, [examMeta, questions, design])
 
   const handleAuth = (loggedUser: UserAccount) => {
     setUser(loggedUser)
@@ -258,7 +251,6 @@ export default function App() {
     setExamMeta(created.examMeta)
     setQuestions(created.questions)
     setDesign(created.design)
-    setGrades(created.grades ?? [])
     setPast([])
     setFuture([])
     setSelectedQuestionId(null)
@@ -274,7 +266,6 @@ export default function App() {
     setExamMeta(found.examMeta)
     setQuestions(found.questions)
     setDesign(found.design)
-    setGrades(found.grades ?? [])
     setPast([])
     setFuture([])
     setSelectedQuestionId(null)
@@ -1228,14 +1219,6 @@ export default function App() {
                 <button
                   className="button button-secondary preview-button"
                   type="button"
-                  onClick={() => setGradingOpen(true)}
-                >
-                  <Users size={17} />
-                  <span>Not girişi{grades.length > 0 ? ` (${grades.length})` : ""}</span>
-                </button>
-                <button
-                  className="button button-secondary preview-button"
-                  type="button"
                   onClick={() => setPreviewOpen(true)}
                 >
                   <ScanLine size={17} />
@@ -1759,15 +1742,6 @@ export default function App() {
           />
         </div>
       )}
-
-      <GradingModal
-        open={gradingOpen}
-        examTitle={examMeta.title}
-        questions={questions}
-        grades={grades}
-        onClose={() => setGradingOpen(false)}
-        onChange={setGrades}
-      />
 
       <div
         className={`toast ${toast ? "visible" : ""}`}

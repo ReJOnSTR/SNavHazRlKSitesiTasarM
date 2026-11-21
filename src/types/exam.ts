@@ -64,14 +64,6 @@ export type RubricItem = {
   points: number
 }
 
-export type StudentGrade = {
-  id: string
-  studentNo: string
-  studentName: string
-  booklet?: "A" | "B"
-  scores: Record<number, number>
-}
-
 export type ExamMeta = {
   title: string
   school: string
@@ -96,5 +88,4 @@ export type ExamSnapshot = {
   examMeta: ExamMeta
   questions: Question[]
   design: PaperDesign
-  grades?: StudentGrade[]
 }

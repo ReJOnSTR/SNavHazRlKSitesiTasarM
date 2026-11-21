@@ -218,7 +218,10 @@ function detectAndCleanWatermark(
   const watermarkSamples: PageTextSample[] = []
   const cleanSamples: PageTextSample[] = []
   for (const s of samples) {
-    const isGiantBg = s.fontPx > medianFont * 2.4 && s.text.length >= 2
+    const isGiantBg =
+      s.fontPx > medianFont * 2.4 &&
+      s.text.length >= 2 &&
+      (s.isRotatedWatermark || s.y1 > canvas.height * 0.12)
     if (s.isRotatedWatermark || isGiantBg) {
       watermarkSamples.push(s)
     } else {
@@ -235,18 +238,51 @@ function detectAndCleanWatermark(
       const imgData = ctx.getImageData(0, 0, cw, ch)
       const data = imgData.data
 
+      // Build text-protection mask around normal text bounding boxes (+3px pad)
+      const textMask = new Uint8Array(cw * ch)
+      for (const s of cleanSamples) {
+        const minX = Math.max(0, Math.floor(s.x1) - 3)
+        const maxX = Math.min(cw - 1, Math.ceil(s.x2) + 3)
+        const minY = Math.max(0, Math.floor(s.y1) - 3)
+        const maxY = Math.min(ch - 1, Math.ceil(s.y2) + 3)
+        for (let py = minY; py <= maxY; py++) {
+          const rowOffset = py * cw
+          for (let px = minX; px <= maxX; px++) {
+            textMask[rowOffset + px] = 1
+          }
+        }
+      }
+
+      const hasDarkNeighbor = (x: number, y: number) => {
+        for (let dy = -1; dy <= 1; dy++) {
+          const ny = y + dy
+          if (ny < 0 || ny >= ch) continue
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue
+            const nx = x + dx
+            if (nx < 0 || nx >= cw) continue
+            const ni = (ny * cw + nx) * 4
+            const nLum =
+              0.299 * data[ni] + 0.587 * data[ni + 1] + 0.114 * data[ni + 2]
+            if (nLum < 85) return true
+          }
+        }
+        return false
+      }
+
       if (
         refImageData &&
         refImageData.width === cw &&
         refImageData.height === ch
       ) {
-        // Cross-page diff: pixels identical across two different pages (and not dark black text) are static background watermarks
+        // Cross-page diff: pixels identical across two different pages (and not dark text / protected text mask)
         const refData = refImageData.data
         const yStart = Math.floor(ch * 0.05)
         const yEnd = Math.floor(ch * 0.95)
         for (let y = yStart; y < yEnd; y++) {
           for (let x = 0; x < cw; x++) {
-            const i = (y * cw + x) * 4
+            const idx = y * cw + x
+            const i = idx * 4
             const r1 = data[i]
             const g1 = data[i + 1]
             const b1 = data[i + 2]
@@ -262,7 +298,8 @@ function detectAndCleanWatermark(
               Math.abs(b1 - b2) <= 12
             ) {
               const lum = 0.299 * r1 + 0.587 * g1 + 0.114 * b1
-              if (lum >= 95) {
+              if (textMask[idx] && lum < 225) continue
+              if (lum >= 165 && !hasDarkNeighbor(x, y)) {
                 wmPixelCount += 1
                 if (applyClean) {
                   data[i] = 255
@@ -275,22 +312,27 @@ function detectAndCleanWatermark(
           }
         }
       } else {
-        // Single-page fallback: only remove ultra-faint desaturated gray without touching any colors
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i]
-          const g = data[i + 1]
-          const b = data[i + 2]
-          const a = data[i + 3]
-          if (a < 20 || (r >= 248 && g >= 248 && b >= 248)) continue
-          const lum = 0.299 * r + 0.587 * g + 0.114 * b
-          const spread = Math.max(r, g, b) - Math.min(r, g, b)
-          if (lum >= 226 && spread < 10) {
-            wmPixelCount += 1
-            if (applyClean) {
-              data[i] = 255
-              data[i + 1] = 255
-              data[i + 2] = 255
-              data[i + 3] = 255
+        // Single-page fallback: only remove ultra-faint desaturated gray outside protected text
+        for (let y = 0; y < ch; y++) {
+          for (let x = 0; x < cw; x++) {
+            const idx = y * cw + x
+            if (textMask[idx]) continue
+            const i = idx * 4
+            const r = data[i]
+            const g = data[i + 1]
+            const b = data[i + 2]
+            const a = data[i + 3]
+            if (a < 20 || (r >= 248 && g >= 248 && b >= 248)) continue
+            const lum = 0.299 * r + 0.587 * g + 0.114 * b
+            const spread = Math.max(r, g, b) - Math.min(r, g, b)
+            if (lum >= 226 && spread < 10 && !hasDarkNeighbor(x, y)) {
+              wmPixelCount += 1
+              if (applyClean) {
+                data[i] = 255
+                data[i + 1] = 255
+                data[i + 2] = 255
+                data[i + 3] = 255
+              }
             }
           }
         }

@@ -11492,3 +11492,106 @@ body {
     max-height: 210px;
   }
 }
+
+/* Dual A+B Booklet Export Stage */
+.dual-export-stage {
+  position: fixed;
+  left: -12000px;
+  top: 0;
+  width: 900px;
+  pointer-events: none;
+  opacity: 0;
+  z-index: -1;
+}
+
+/* Rubric in Answer Key & Question Inspector */
+.ak-rubric-list {
+  margin: 4px 0 0;
+  padding: 4px 0 0 12px;
+  list-style: disc;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px dashed rgba(15, 23, 42, 0.14);
+}
+
+.ak-rubric-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 9.5px;
+  color: #334155;
+}
+
+.ak-rubric-list li strong {
+  font-size: 9.5px;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.rubric-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-alt);
+}
+
+.rubric-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.rubric-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rubric-item-row {
+  display: grid;
+  grid-template-columns: 1fr 56px 26px;
+  gap: 6px;
+  align-items: center;
+}
+
+.rubric-item-row input {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.rubric-pts-input {
+  text-align: center;
+}
+
+.rubric-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.rubric-empty-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+
