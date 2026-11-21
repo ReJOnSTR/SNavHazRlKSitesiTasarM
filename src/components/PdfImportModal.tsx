@@ -15,7 +15,7 @@ import {
   ZoomOut,
 } from "lucide-react"
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from "pdfjs-dist"
-import { MathText } from "../MathInput"
+import MathInput, { MathText } from "../MathInput"
 import { stripPdfWatermarks } from "../utils/pdfWatermarkRemover"
 import type {
   DetectedPdfQuestion,
@@ -457,6 +457,76 @@ function formatLineRuns(
   return out.join("").trim()
 }
 
+const SUPERSCRIPT_MAP: Record<string, string> = {
+  "⁰": "0",
+  "¹": "1",
+  "²": "2",
+  "³": "3",
+  "⁴": "4",
+  "⁵": "5",
+  "⁶": "6",
+  "⁷": "7",
+  "⁸": "8",
+  "⁹": "9",
+  "⁺": "+",
+  "⁻": "-",
+  "⁼": "=",
+  "⁽": "(",
+  "⁾": ")",
+  "ⁿ": "n",
+  "ⁱ": "i",
+}
+
+const SUBSCRIPT_MAP: Record<string, string> = {
+  "₀": "0",
+  "₁": "1",
+  "₂": "2",
+  "₃": "3",
+  "₄": "4",
+  "₅": "5",
+  "₆": "6",
+  "₇": "7",
+  "₈": "8",
+  "₉": "9",
+  "₊": "+",
+  "₋": "-",
+  "₌": "=",
+  "₍": "(",
+  "₎": ")",
+}
+
+function normalizeExtractedMath(raw: string): string {
+  if (!raw) return raw
+  let out = raw
+
+  out = out.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ]+/g, (run) => {
+    const mapped = Array.from(run)
+      .map((ch) => SUPERSCRIPT_MAP[ch] ?? ch)
+      .join("")
+    return `^{${mapped}}`
+  })
+
+  out = out.replace(/[₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎]+/g, (run) => {
+    const mapped = Array.from(run)
+      .map((ch) => SUBSCRIPT_MAP[ch] ?? ch)
+      .join("")
+    return `_{${mapped}}`
+  })
+
+  out = out.replace(/√\(([^()]+)\)/g, "√{$1}")
+  out = out.replace(/√([0-9]+|[a-zA-Z])(?![{])/g, "√{$1}")
+
+  out = out.replace(
+    /(^|[\s(=+\-×·])(\d{1,3}|[a-zA-Z])\/(\d{1,3}|[a-zA-Z])(?=$|[\s),.;:?!+\-×·])/g,
+    (full, prefix: string, num: string, den: string) => {
+      if (/^[A-Z]$/.test(num) && /^[A-Z]$/.test(den)) return full
+      return `${prefix}[${num}/${den}]`
+    },
+  )
+
+  return out
+}
+
 function analyzeQuestionCrop(
   canvas: HTMLCanvasElement,
   sx: number,
@@ -532,12 +602,28 @@ function analyzeQuestionCrop(
       fontSum += cur.fontPx
       if (cur.fontBoldHint) boldVotes += 1
       let gapBefore = ""
+      let tokenText = cur.text
       if (i > 0) {
-        const gap = cur.x1 - ordered[i - 1].x2
-        gapBefore = gap > cur.fontPx * 1.35 ? "  " : " "
+        const prev = ordered[i - 1]
+        const gap = cur.x1 - prev.x2
+        const isSmallScript =
+          cur.fontPx < prev.fontPx * 0.82 &&
+          tokenText.length <= 6 &&
+          !/\s/.test(tokenText) &&
+          gap <= cur.fontPx * 0.9 &&
+          /[a-zA-Z0-9)\]]$/.test(prev.text)
+        if (isSmallScript && cur.y2 < prev.y1 + prev.fontPx * 0.55) {
+          tokenText = `^{${tokenText}}`
+          gapBefore = ""
+        } else if (isSmallScript && cur.y1 > prev.y1 + prev.fontPx * 0.35) {
+          tokenText = `_{${tokenText}}`
+          gapBefore = ""
+        } else {
+          gapBefore = gap > cur.fontPx * 1.35 ? "  " : " "
+        }
         text += gapBefore
       }
-      text += cur.text
+      text += tokenText
       const itemStyle = sampleRegionStyle(
         canvas,
         cur.x1,
@@ -547,7 +633,7 @@ function analyzeQuestionCrop(
         cur.fontBoldHint,
       )
       styledItems.push({
-        text: cur.text,
+        text: tokenText,
         gapBefore,
         isBold: itemStyle.isBold,
         color: itemStyle.color,
@@ -1022,7 +1108,7 @@ function analyzeQuestionCrop(
       : undefined
   const lead =
     leadLines.length > 0
-      ? joinPreservingSpacing(leadLines, leadBold, leadColor)
+      ? normalizeExtractedMath(joinPreservingSpacing(leadLines, leadBold, leadColor))
       : undefined
 
   const subTextColors = new Set(subTextLines.map((l) => l.color).filter(Boolean))
@@ -1032,7 +1118,7 @@ function analyzeQuestionCrop(
       : undefined
   const subText =
     subTextLines.length > 0
-      ? joinPreservingSpacing(subTextLines, false, subTextColor)
+      ? normalizeExtractedMath(joinPreservingSpacing(subTextLines, false, subTextColor))
       : undefined
 
   const promptBold =
@@ -1043,7 +1129,9 @@ function analyzeQuestionCrop(
     promptColors.size === 1 && promptLines.every((l) => l.color)
       ? promptLines[0].color
       : undefined
-  const prompt = joinPreservingSpacing(promptLines, promptBold, promptColor)
+  const prompt = normalizeExtractedMath(
+    joinPreservingSpacing(promptLines, promptBold, promptColor),
+  )
 
   let optionLayout: "inherit" | "grid" | "inline" | "list" | undefined
   if (options.length >= 2) {
@@ -1074,7 +1162,10 @@ function analyzeQuestionCrop(
     prompt,
     promptBold,
     promptColor,
-    options: options.length >= 2 ? options.slice(0, 8) : undefined,
+    options:
+      options.length >= 2
+        ? options.slice(0, 8).map((opt) => normalizeExtractedMath(opt))
+        : undefined,
     optionLayout,
     figureImage,
     figureWidth,
@@ -1976,14 +2067,15 @@ export default function PdfImportModal({
                                   <option value="none">Belirtilmemiş</option>
                                 </select>
                               </label>
-                              <label className="pdf-edit-field">
+                              <div className="pdf-edit-field">
                                 <span>Üst metin / başlık (opsiyonel)</span>
-                                <textarea
+                                <MathInput
+                                  multiline
                                   rows={2}
+                                  label="Üst metin"
                                   value={item.lead ?? ""}
                                   placeholder="Üst metin yoksa boş bırakın"
-                                  onChange={(event) => {
-                                    const val = event.target.value
+                                  onChange={(val) => {
                                     setCroppedItems((prev) =>
                                       prev.map((entry) =>
                                         entry.id === item.id
@@ -1996,7 +2088,7 @@ export default function PdfImportModal({
                                     )
                                   }}
                                 />
-                              </label>
+                              </div>
                               {item.figureImage ? (
                                 <div className="pdf-edit-figure">
                                   <div className="pdf-edit-figure-head">
@@ -2050,7 +2142,7 @@ export default function PdfImportModal({
                                     : "PDF'den görsel seç"}
                                 </button>
                               )}
-                              <label className="pdf-edit-field">
+                              <div className="pdf-edit-field">
                                 <span className="pdf-edit-field-head">
                                   <span>Alt metin (görsel altı, opsiyonel)</span>
                                   {item.subText ? (
@@ -2077,12 +2169,13 @@ export default function PdfImportModal({
                                     </button>
                                   ) : null}
                                 </span>
-                                <textarea
+                                <MathInput
+                                  multiline
                                   rows={2}
+                                  label="Alt metin"
                                   placeholder="Görselin altında, kalın soru metninden önce yer alacak metin..."
                                   value={item.subText ?? ""}
-                                  onChange={(event) => {
-                                    const val = event.target.value
+                                  onChange={(val) => {
                                     setCroppedItems((prev) =>
                                       prev.map((entry) =>
                                         entry.id === item.id
@@ -2095,8 +2188,8 @@ export default function PdfImportModal({
                                     )
                                   }}
                                 />
-                              </label>
-                              <label className="pdf-edit-field">
+                              </div>
+                              <div className="pdf-edit-field">
                                 <span className="pdf-edit-field-head">
                                   <span>Soru metni (kalın)</span>
                                   {item.prompt.includes("\n") ? (
@@ -2137,11 +2230,12 @@ export default function PdfImportModal({
                                     </button>
                                   ) : null}
                                 </span>
-                                <textarea
+                                <MathInput
+                                  multiline
                                   rows={3}
+                                  label="Soru metni"
                                   value={item.prompt}
-                                  onChange={(event) => {
-                                    const val = event.target.value
+                                  onChange={(val) => {
                                     setCroppedItems((prev) =>
                                       prev.map((entry) =>
                                         entry.id === item.id
@@ -2151,7 +2245,7 @@ export default function PdfImportModal({
                                     )
                                   }}
                                 />
-                              </label>
+                              </div>
                               {item.parsedType === "multiple" &&
                                 item.options && (
                                   <div className="pdf-edit-options">
@@ -2164,11 +2258,10 @@ export default function PdfImportModal({
                                         <b>
                                           {String.fromCharCode(65 + optIdx)})
                                         </b>
-                                        <input
-                                          type="text"
+                                        <MathInput
+                                          label={`Şık ${String.fromCharCode(65 + optIdx)}`}
                                           value={opt}
-                                          onChange={(event) => {
-                                            const val = event.target.value
+                                          onChange={(val) => {
                                             setCroppedItems((prev) =>
                                               prev.map((entry) =>
                                                 entry.id === item.id &&
@@ -2213,6 +2306,17 @@ export default function PdfImportModal({
                                     alt={`Soru ${idx + 1} şekli`}
                                   />
                                 </div>
+                              )}
+                              {item.subText && (
+                                <p
+                                  className="pdf-split-subtext"
+                                  style={{
+                                    fontWeight: 400,
+                                    color: item.subTextColor || undefined,
+                                  }}
+                                >
+                                  <MathText text={item.subText} />
+                                </p>
                               )}
                               {item.prompt && (
                                 <p
