@@ -874,6 +874,82 @@ function analyzeQuestionCrop(
     }
   }
 
+  type TextBlock = { lines: ParsedLine[]; hasGapBefore: boolean }
+  const stemCueRe =
+    /(?:kaçtır|hangisi|hangileridir|olabilir|olamaz|doğrudur|yanlıştır|bulunuz|hesaplayınız)\b|\?$/i
+  const stemStartRe =
+    /^(?:Buna göre|Bu bilgilere göre|Yukarıdaki|Aşağıdaki|Verilenlere göre|Buna karşılık)\b/i
+  const premiseEndRe =
+    /(?:biliniyor|verilmiştir|veriliyor|sağlanmaktadır|olmak üzere|gösterilmiştir)[.,]\s*$/i
+  const premiseLineRe = /^(?:(?:I{1,3}|IV|V)\s*[.)]|[a-zA-Z]\([^)]+\)\s*=)/
+
+  const groupIntoBlocks = (input: ParsedLine[]): TextBlock[] => {
+    if (input.length === 0) return []
+    const blocks: TextBlock[] = [{ lines: [input[0]], hasGapBefore: false }]
+    for (let i = 1; i < input.length; i++) {
+      const prev = input[i - 1]
+      const cur = input[i]
+      const verticalGap = cur.y1 - prev.y2 > prev.fontPx * 0.68
+      const boldShift = cur.isBold !== prev.isBold
+      const sentenceSplit =
+        premiseEndRe.test(prev.text) &&
+        (stemStartRe.test(cur.text) || stemCueRe.test(cur.text))
+      if (verticalGap || boldShift || sentenceSplit) {
+        blocks.push({ lines: [cur], hasGapBefore: verticalGap })
+      } else {
+        blocks[blocks.length - 1].lines.push(cur)
+      }
+    }
+    return blocks
+  }
+
+  const scoreStemBlock = (
+    block: TextBlock,
+    index: number,
+    totalBlocks: number,
+  ): number => {
+    const joined = block.lines.map((l) => l.text).join(" ")
+    const boldCount = block.lines.filter((l) => l.isBold).length
+    const mostlyBold = boldCount >= Math.ceil(block.lines.length * 0.6)
+    let score = 0
+    if (stemCueRe.test(joined)) score += 3
+    if (stemStartRe.test(joined)) score += 2
+    if (mostlyBold) score += 3
+    if (index === totalBlocks - 1) score += 2
+    if (block.hasGapBefore) score += 1.5
+    if (premiseEndRe.test(joined)) score -= 3
+    if (block.lines.every((l) => premiseLineRe.test(l.text))) score -= 3
+    return score
+  }
+
+  const splitPremiseFromStem = (
+    input: ParsedLine[],
+  ): { prefix: ParsedLine[]; stem: ParsedLine[] } => {
+    const blocks = groupIntoBlocks(input)
+    if (blocks.length < 2) {
+      return { prefix: [], stem: input }
+    }
+    const scores = blocks.map((b, i) => scoreStemBlock(b, i, blocks.length))
+    // Find the first trailing block where the stem begins
+    let stemBlockIdx = blocks.length - 1
+    while (
+      stemBlockIdx > 0 &&
+      scores[stemBlockIdx - 1] >= scores[blocks.length - 1] - 1 &&
+      scores[stemBlockIdx - 1] >= 3
+    ) {
+      stemBlockIdx -= 1
+    }
+    const stemScore = scores[stemBlockIdx]
+    const prefixMaxScore = Math.max(...scores.slice(0, stemBlockIdx))
+    if (stemBlockIdx > 0 && stemScore >= 2 && stemScore > prefixMaxScore) {
+      return {
+        prefix: blocks.slice(0, stemBlockIdx).flatMap((b) => b.lines),
+        stem: blocks.slice(stemBlockIdx).flatMap((b) => b.lines),
+      }
+    }
+    return { prefix: [], stem: input }
+  }
+
   let leadLines: ParsedLine[] = []
   let subTextLines: ParsedLine[] = []
   let promptLines: ParsedLine[] = stemLines
@@ -883,96 +959,19 @@ function analyzeQuestionCrop(
     const belowFig = stemLines.filter((l) => l.y1 >= figureBounds!.y + 6)
     if (aboveFig.length > 0 && belowFig.length > 0) {
       leadLines = aboveFig
-      promptLines = belowFig
+      const split = splitPremiseFromStem(belowFig)
+      subTextLines = split.prefix
+      promptLines = split.stem
     } else if (belowFig.length >= 2) {
-      promptLines = belowFig
+      const split = splitPremiseFromStem(belowFig)
+      subTextLines = split.prefix
+      promptLines = split.stem
     }
-  }
-
-  // Split normal intro/formula lines below the figure from the bold question stem
-  if (figureBounds && promptLines.length >= 2) {
-    let boldStartIdx = -1
-    for (let i = 1; i < promptLines.length; i++) {
-      if (promptLines[i].isBold && !promptLines[i - 1].isBold) {
-        const upperMostlyNormal =
-          promptLines.slice(0, i).filter((l) => !l.isBold).length >=
-          Math.ceil(i * 0.6)
-        const lowerMostlyBold =
-          promptLines.slice(i).filter((l) => l.isBold).length >=
-          Math.ceil((promptLines.length - i) * 0.6)
-        if (upperMostlyNormal && lowerMostlyBold) {
-          boldStartIdx = i
-        }
-      }
-    }
-    if (boldStartIdx > 0) {
-      subTextLines = promptLines.slice(0, boldStartIdx)
-      promptLines = promptLines.slice(boldStartIdx)
-    }
-  }
-
-  if (leadLines.length === 0 && promptLines.length >= 2) {
-    // Bold lower question stem vs normal upper intro text (common in Turkish exams)
-    let boldStartIdx = -1
-    for (let i = 1; i < promptLines.length; i++) {
-      if (promptLines[i].isBold && !promptLines[i - 1].isBold) {
-        const upperMostlyNormal =
-          promptLines.slice(0, i).filter((l) => !l.isBold).length >=
-          Math.ceil(i * 0.6)
-        const lowerMostlyBold =
-          promptLines.slice(i).filter((l) => l.isBold).length >=
-          Math.ceil((promptLines.length - i) * 0.6)
-        if (upperMostlyNormal && lowerMostlyBold) {
-          boldStartIdx = i
-        }
-      }
-    }
-    if (boldStartIdx > 0) {
-      leadLines = promptLines.slice(0, boldStartIdx)
-      promptLines = promptLines.slice(boldStartIdx)
-    }
-  }
-
-  if (leadLines.length === 0 && promptLines.length >= 2) {
-    // Vertical paragraph gap between upper intro and lower question stem
-    let gapSplitIdx = -1
-    for (let i = 1; i < promptLines.length; i++) {
-      const prev = promptLines[i - 1]
-      const cur = promptLines[i]
-      if (cur.y1 - prev.y2 > prev.fontPx * 0.8) {
-        const lowerText = promptLines
-          .slice(i)
-          .map((l) => l.text)
-          .join(" ")
-        if (
-          /\?$/.test(lowerText) ||
-          /^(?:Buna göre|Yukarıdaki|Aşağıdaki|Bu\s)/i.test(lowerText)
-        ) {
-          gapSplitIdx = i
-        }
-      }
-    }
-    if (gapSplitIdx > 0) {
-      leadLines = promptLines.slice(0, gapSplitIdx)
-      promptLines = promptLines.slice(gapSplitIdx)
-    }
-  }
-
-  if (leadLines.length === 0 && promptLines.length >= 2) {
-    // Upper bold/larger heading lines followed by normal body text
-    let splitAt = 0
-    for (let i = 0; i < promptLines.length - 1; i++) {
-      const l = promptLines[i]
-      const isHeading = l.isBold || l.fontPx >= medianFontPx * 1.12
-      if (isHeading) {
-        splitAt = i + 1
-      } else {
-        break
-      }
-    }
-    if (splitAt > 0 && splitAt < promptLines.length) {
-      leadLines = promptLines.slice(0, splitAt)
-      promptLines = promptLines.slice(splitAt)
+  } else if (!figureBounds && stemLines.length >= 2) {
+    const split = splitPremiseFromStem(stemLines)
+    if (split.prefix.length > 0) {
+      leadLines = split.prefix
+      promptLines = split.stem
     }
   }
 
@@ -2052,7 +2051,32 @@ export default function PdfImportModal({
                                 </button>
                               )}
                               <label className="pdf-edit-field">
-                                <span>Alt metin (görsel altı, opsiyonel)</span>
+                                <span className="pdf-edit-field-head">
+                                  <span>Alt metin (görsel altı, opsiyonel)</span>
+                                  {item.subText ? (
+                                    <button
+                                      type="button"
+                                      className="pdf-field-action"
+                                      onClick={() =>
+                                        setCroppedItems((prev) =>
+                                          prev.map((entry) =>
+                                            entry.id === item.id
+                                              ? {
+                                                ...entry,
+                                                prompt: [entry.subText, entry.prompt]
+                                                  .filter(Boolean)
+                                                  .join("\n"),
+                                                subText: undefined,
+                                              }
+                                              : entry,
+                                          ),
+                                        )
+                                      }
+                                    >
+                                      Soru metniyle birleştir ↓
+                                    </button>
+                                  ) : null}
+                                </span>
                                 <textarea
                                   rows={2}
                                   placeholder="Görselin altında, kalın soru metninden önce yer alacak metin..."
@@ -2073,7 +2097,46 @@ export default function PdfImportModal({
                                 />
                               </label>
                               <label className="pdf-edit-field">
-                                <span>Soru metni (kalın)</span>
+                                <span className="pdf-edit-field-head">
+                                  <span>Soru metni (kalın)</span>
+                                  {item.prompt.includes("\n") ? (
+                                    <button
+                                      type="button"
+                                      className="pdf-field-action"
+                                      onClick={() => {
+                                        const lines = item.prompt.split("\n")
+                                        const firstLine = lines[0]?.trim()
+                                        const rest = lines.slice(1).join("\n").trim()
+                                        if (!firstLine || !rest) return
+                                        setCroppedItems((prev) =>
+                                          prev.map((entry) =>
+                                            entry.id === item.id
+                                              ? entry.figureImage
+                                                ? {
+                                                  ...entry,
+                                                  subText: [entry.subText, firstLine]
+                                                    .filter(Boolean)
+                                                    .join("\n"),
+                                                  prompt: rest,
+                                                }
+                                                : {
+                                                  ...entry,
+                                                  lead: [entry.lead, firstLine]
+                                                    .filter(Boolean)
+                                                    .join("\n"),
+                                                  prompt: rest,
+                                                }
+                                              : entry,
+                                          ),
+                                        )
+                                      }}
+                                    >
+                                      {item.figureImage
+                                        ? "İlk satırı alt metne ayır ↑"
+                                        : "İlk satırı üst metne ayır ↑"}
+                                    </button>
+                                  ) : null}
+                                </span>
                                 <textarea
                                   rows={3}
                                   value={item.prompt}
