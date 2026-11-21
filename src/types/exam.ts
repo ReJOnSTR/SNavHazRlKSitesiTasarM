@@ -38,6 +38,9 @@ export type Question = {
   lead?: string
   leadBold?: boolean
   leadColor?: string
+  /** Optional body text printed BELOW the question image and ABOVE the bold question stem */
+  subText?: string
+  subTextColor?: string
   promptBold?: boolean
   promptColor?: string
   /** Optional image (data URL) printed above the question stem */

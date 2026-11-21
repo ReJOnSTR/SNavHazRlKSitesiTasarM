@@ -962,6 +962,7 @@ function QuestionLeadFields({
 }) {
   const fileRef = useRef<HTMLInputElement>(null)
   const hasLead = question.lead !== undefined
+  const hasSubText = question.subText !== undefined
   const readImage = (file?: File) => {
     if (!file) return
     if (!file.type.startsWith("image/")) {
@@ -1061,7 +1062,33 @@ function QuestionLeadFields({
         </div>
       )}
 
-      {(!hasLead || !question.image) && (
+      {hasSubText && (
+        <div className="form-field">
+          <span className="field-head">
+            Alt metin (görsel altı)
+            <button
+              className="link-remove"
+              type="button"
+              onClick={() => onUpdate({ subText: undefined })}
+            >
+              Kaldır
+            </button>
+          </span>
+          <MathInput
+            multiline
+            rows={3}
+            label="Alt metin"
+            value={question.subText ?? ""}
+            onChange={(subText) => onUpdate({ subText })}
+          />
+          <small className="field-hint">
+            Görselin altında, kalın soru kökünden önce yer alan açıklama veya
+            formül.
+          </small>
+        </div>
+      )}
+
+      {(!hasLead || !hasSubText || !question.image) && (
         <div className="lead-add-row">
           {!hasLead && (
             <button
@@ -1071,6 +1098,16 @@ function QuestionLeadFields({
             >
               <Plus size={13} />
               Giriş metni
+            </button>
+          )}
+          {!hasSubText && (
+            <button
+              className="lead-add-button"
+              type="button"
+              onClick={() => onUpdate({ subText: "" })}
+            >
+              <Plus size={13} />
+              Alt metin
             </button>
           )}
           {!question.image && (
@@ -1158,6 +1195,19 @@ export function QuestionInspector({
           onChange={(prompt) => onUpdate({ prompt })}
         />
       </FormField>
+
+      <label className="checkbox-inline" style={{ marginTop: -4 }}>
+        <input
+          type="checkbox"
+          checked={
+            question.promptBold === true ||
+            (question.promptBold !== false &&
+              Boolean(question.image || question.subText || question.lead))
+          }
+          onChange={(event) => onUpdate({ promptBold: event.target.checked })}
+        />
+        <span>Soru metnini kalın yaz</span>
+      </label>
 
       {question.type === "multiple" && question.options && (
         <>

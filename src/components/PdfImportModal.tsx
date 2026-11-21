@@ -36,6 +36,8 @@ type CroppedQuestionItem = {
   lead?: string
   leadBold?: boolean
   leadColor?: string
+  subText?: string
+  subTextColor?: string
   prompt: string
   promptBold?: boolean
   promptColor?: string
@@ -468,6 +470,8 @@ function analyzeQuestionCrop(
   lead?: string
   leadBold?: boolean
   leadColor?: string
+  subText?: string
+  subTextColor?: string
   prompt: string
   promptBold?: boolean
   promptColor?: string
@@ -871,6 +875,7 @@ function analyzeQuestionCrop(
   }
 
   let leadLines: ParsedLine[] = []
+  let subTextLines: ParsedLine[] = []
   let promptLines: ParsedLine[] = stemLines
 
   if (figureBounds && stemLines.length >= 2) {
@@ -879,6 +884,30 @@ function analyzeQuestionCrop(
     if (aboveFig.length > 0 && belowFig.length > 0) {
       leadLines = aboveFig
       promptLines = belowFig
+    } else if (belowFig.length >= 2) {
+      promptLines = belowFig
+    }
+  }
+
+  // Split normal intro/formula lines below the figure from the bold question stem
+  if (figureBounds && promptLines.length >= 2) {
+    let boldStartIdx = -1
+    for (let i = 1; i < promptLines.length; i++) {
+      if (promptLines[i].isBold && !promptLines[i - 1].isBold) {
+        const upperMostlyNormal =
+          promptLines.slice(0, i).filter((l) => !l.isBold).length >=
+          Math.ceil(i * 0.6)
+        const lowerMostlyBold =
+          promptLines.slice(i).filter((l) => l.isBold).length >=
+          Math.ceil((promptLines.length - i) * 0.6)
+        if (upperMostlyNormal && lowerMostlyBold) {
+          boldStartIdx = i
+        }
+      }
+    }
+    if (boldStartIdx > 0) {
+      subTextLines = promptLines.slice(0, boldStartIdx)
+      promptLines = promptLines.slice(boldStartIdx)
     }
   }
 
@@ -997,8 +1026,19 @@ function analyzeQuestionCrop(
       ? joinPreservingSpacing(leadLines, leadBold, leadColor)
       : undefined
 
+  const subTextColors = new Set(subTextLines.map((l) => l.color).filter(Boolean))
+  const subTextColor =
+    subTextColors.size === 1 && subTextLines.every((l) => l.color)
+      ? subTextLines[0].color
+      : undefined
+  const subText =
+    subTextLines.length > 0
+      ? joinPreservingSpacing(subTextLines, false, subTextColor)
+      : undefined
+
   const promptBold =
-    promptLines.length > 0 && promptLines.every((l) => l.isBold)
+    (promptLines.length > 0 && promptLines.every((l) => l.isBold)) ||
+    Boolean(figureImage || subText || lead)
   const promptColors = new Set(promptLines.map((l) => l.color).filter(Boolean))
   const promptColor =
     promptColors.size === 1 && promptLines.every((l) => l.color)
@@ -1030,6 +1070,8 @@ function analyzeQuestionCrop(
     lead,
     leadBold,
     leadColor,
+    subText,
+    subTextColor,
     prompt,
     promptBold,
     promptColor,
@@ -1423,6 +1465,8 @@ export default function PdfImportModal({
         lead: analyzed.lead,
         leadBold: analyzed.leadBold,
         leadColor: analyzed.leadColor,
+        subText: analyzed.subText,
+        subTextColor: analyzed.subTextColor,
         prompt: analyzed.prompt,
         promptBold: analyzed.promptBold,
         promptColor: analyzed.promptColor,
@@ -1445,6 +1489,8 @@ export default function PdfImportModal({
           lead: item.lead,
           leadBold: item.leadBold,
           leadColor: item.leadColor,
+          subText: item.subText,
+          subTextColor: item.subTextColor,
           prompt: item.prompt,
           promptBold: item.promptBold,
           promptColor: item.promptColor,
@@ -2006,7 +2052,28 @@ export default function PdfImportModal({
                                 </button>
                               )}
                               <label className="pdf-edit-field">
-                                <span>Soru metni</span>
+                                <span>Alt metin (görsel altı, opsiyonel)</span>
+                                <textarea
+                                  rows={2}
+                                  placeholder="Görselin altında, kalın soru metninden önce yer alacak metin..."
+                                  value={item.subText ?? ""}
+                                  onChange={(event) => {
+                                    const val = event.target.value
+                                    setCroppedItems((prev) =>
+                                      prev.map((entry) =>
+                                        entry.id === item.id
+                                          ? {
+                                            ...entry,
+                                            subText: val || undefined,
+                                          }
+                                          : entry,
+                                      ),
+                                    )
+                                  }}
+                                />
+                              </label>
+                              <label className="pdf-edit-field">
+                                <span>Soru metni (kalın)</span>
                                 <textarea
                                   rows={3}
                                   value={item.prompt}

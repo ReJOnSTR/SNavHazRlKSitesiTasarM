@@ -835,10 +835,26 @@ export default function ExamPaper({
                 onLoad={() => setImagesLoaded((count) => count + 1)}
               />
             )}
+            {question.subText && (
+              <p
+                className="question-subtext"
+                style={{
+                  color: question.subTextColor || undefined,
+                }}
+              >
+                <MathText text={question.subText} />
+              </p>
+            )}
             {question.prompt.trim().length > 0 && (
               <p
                 style={{
                   color: question.promptColor || undefined,
+                  fontWeight:
+                    question.promptBold === true ||
+                    (question.promptBold !== false &&
+                      Boolean(question.image || question.subText || question.lead))
+                      ? 700
+                      : undefined,
                 }}
               >
                 <MathText text={question.prompt} />
