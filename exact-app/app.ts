@@ -8,6 +8,7 @@ async function initSchema(db: Database): Promise<void> {
   const hasLeadCol = questionCols.rows.some((row) => String(row[1]) === 'lead');
   const examCols = await db.query('PRAGMA table_info(exams)');
   const hasSchoolCol = examCols.rows.some((row) => String(row[1]) === 'school');
+  const hasGradesCol = examCols.rows.some((row) => String(row[1]) === 'grades_json');
   const templateTable = await db.query(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'custom_templates'",
   );
@@ -15,7 +16,7 @@ async function initSchema(db: Database): Promise<void> {
 
   if (
     (questionCols.rows.length > 0 && !hasLeadCol) ||
-    (examCols.rows.length > 0 && !hasSchoolCol) ||
+    (examCols.rows.length > 0 && (!hasSchoolCol || !hasGradesCol)) ||
     !hasTemplatesTable
   ) {
     await db.execute('DROP TABLE IF EXISTS custom_templates');
@@ -63,7 +64,8 @@ async function initSchema(db: Database): Promise<void> {
       status TEXT NOT NULL DEFAULT 'Taslak',
       updated_at TEXT NOT NULL,
       meta_json TEXT NOT NULL DEFAULT '{}',
-      design_json TEXT NOT NULL DEFAULT '{}'
+      design_json TEXT NOT NULL DEFAULT '{}',
+      grades_json TEXT NOT NULL DEFAULT '[]'
     )
   `);
 
@@ -214,6 +216,7 @@ type SyncExam = {
   };
   questions?: SyncQuestion[];
   design?: Record<string, unknown>;
+  grades?: Array<Record<string, unknown>>;
 };
 
 type SyncBankItem = {
@@ -316,9 +319,9 @@ const sources: Sources = {
             INSERT INTO exams (
               id, user_id, title, school, grade, subject, topic, duration,
               exam_date, academic_year, term, exam_no, teacher, target_points,
-              status, updated_at, meta_json, design_json
+              status, updated_at, meta_json, design_json, grades_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `,
           params: [
             examId,
@@ -339,6 +342,7 @@ const sources: Sources = {
             String(exam.updatedAt ?? ''),
             JSON.stringify(meta),
             JSON.stringify(exam.design ?? {}),
+            JSON.stringify(Array.isArray(exam.grades) ? exam.grades : []),
           ],
         });
 

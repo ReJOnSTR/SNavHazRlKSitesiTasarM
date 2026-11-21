@@ -4,6 +4,7 @@ import type {
   PaperDesign,
   Question,
   QuestionImageSize,
+  StudentGrade,
 } from "../types/exam"
 import type { BankDifficulty, BankQuestionType } from "../pages/BankPage"
 
@@ -24,6 +25,7 @@ export type StoredExam = {
   examMeta: ExamMeta
   questions: Question[]
   design: PaperDesign
+  grades?: StudentGrade[]
 }
 
 export type StoredBankItem = {

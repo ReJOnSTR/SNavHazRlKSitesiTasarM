@@ -1188,6 +1188,18 @@ export default function ExamPaper({
                                     <p>
                                       <MathText text={item.ans} />
                                     </p>
+                                    {item.q.type === "classic" &&
+                                    item.q.rubric &&
+                                    item.q.rubric.length > 0 ? (
+                                      <ul className="ak-rubric-list">
+                                        {item.q.rubric.map((r) => (
+                                          <li key={r.id}>
+                                            <span>{r.label}</span>
+                                            <strong>{r.points} p</strong>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    ) : null}
                                   </div>
                                   <strong className="ak-long-pts">
                                     {item.q.points} p

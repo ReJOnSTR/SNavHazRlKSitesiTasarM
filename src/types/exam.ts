@@ -54,6 +54,22 @@ export type Question = {
   /** Optional student solution area printed at the end of the question */
   solutionSpace?: "none" | "lines" | "box" | "grid"
   solutionHeight?: number
+  /** Optional scoring rubric criteria for classic/open-ended questions */
+  rubric?: RubricItem[]
+}
+
+export type RubricItem = {
+  id: string
+  label: string
+  points: number
+}
+
+export type StudentGrade = {
+  id: string
+  studentNo: string
+  studentName: string
+  booklet?: "A" | "B"
+  scores: Record<number, number>
 }
 
 export type ExamMeta = {
@@ -80,4 +96,5 @@ export type ExamSnapshot = {
   examMeta: ExamMeta
   questions: Question[]
   design: PaperDesign
+  grades?: StudentGrade[]
 }

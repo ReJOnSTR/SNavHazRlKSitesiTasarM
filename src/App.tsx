@@ -28,11 +28,13 @@ import {
   Sun,
   Undo2,
   UploadCloud,
+  Users,
   X,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import AuthView from "./components/AuthView"
 import ExamPaper from "./components/ExamPaper"
+import GradingModal from "./components/GradingModal"
 import HomeView from "./components/HomeView"
 import SettingsPage from "./pages/SettingsPage"
 import {
@@ -87,6 +89,7 @@ import type {
   Question,
   QuestionType,
   SavedPdfEntry,
+  StudentGrade,
 } from "./types/exam"
 import {
   exportExamDocx,
@@ -166,6 +169,13 @@ export default function App() {
   )
 
   const [selectedQuestionId, setSelectedQuestionId] = useState<number | null>(null)
+  const [grades, setGrades] = useState<StudentGrade[]>([])
+  const [gradingOpen, setGradingOpen] = useState(false)
+  const [dualBookletPayload, setDualBookletPayload] = useState<{
+    questionsA: Question[]
+    questionsB: Question[]
+  } | null>(null)
+  const dualExportRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (user) {
@@ -193,6 +203,7 @@ export default function App() {
         },
         questions,
         design,
+        grades,
         updatedAt: new Date().toISOString(),
       }
       saveUserExam(draftExam)
@@ -210,6 +221,7 @@ export default function App() {
       examMeta,
       questions,
       design,
+      grades,
       updatedAt: new Date().toISOString(),
     }
     saveUserExam(updated)
@@ -217,7 +229,7 @@ export default function App() {
       prev.map((item) => (item.id === activeExamId ? updated : item)),
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [examMeta, questions, design])
+  }, [examMeta, questions, design, grades])
 
   const handleAuth = (loggedUser: UserAccount) => {
     setUser(loggedUser)
@@ -246,6 +258,7 @@ export default function App() {
     setExamMeta(created.examMeta)
     setQuestions(created.questions)
     setDesign(created.design)
+    setGrades(created.grades ?? [])
     setPast([])
     setFuture([])
     setSelectedQuestionId(null)
@@ -261,6 +274,7 @@ export default function App() {
     setExamMeta(found.examMeta)
     setQuestions(found.questions)
     setDesign(found.design)
+    setGrades(found.grades ?? [])
     setPast([])
     setFuture([])
     setSelectedQuestionId(null)
@@ -579,6 +593,42 @@ export default function App() {
       "-cevap-anahtari",
       "Cevap anahtarı PDF olarak indirildi",
     )
+  }
+
+  const handleDownloadDualBookletPdf = async () => {
+    if (pdfExporting) return
+    if (questions.length === 0) {
+      notify("Önce sınava soru ekleyin")
+      return
+    }
+    const questionsA = questions
+    const questionsB = shuffleBookletQuestions(questions, true)
+    setDualBookletPayload({ questionsA, questionsB })
+    try {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => window.setTimeout(resolve, 160)),
+        ),
+      )
+      const stage = dualExportRef.current
+      if (!stage) {
+        notify("Kitapçık önizlemesi hazırlanamadı")
+        return
+      }
+      const pages = Array.from(
+        stage.querySelectorAll<HTMLElement>(
+          "article.exam-paper, article.answer-key-paper",
+        ),
+      )
+      await exportPagesToPdf(
+        pages,
+        stage,
+        "-A-B-kitapcik",
+        "A ve B kitapçıkları PDF olarak indirildi",
+      )
+    } finally {
+      setDualBookletPayload(null)
+    }
   }
 
   const handleDownloadDocx = async () => {
@@ -1178,6 +1228,14 @@ export default function App() {
                 <button
                   className="button button-secondary preview-button"
                   type="button"
+                  onClick={() => setGradingOpen(true)}
+                >
+                  <Users size={17} />
+                  <span>Not girişi{grades.length > 0 ? ` (${grades.length})` : ""}</span>
+                </button>
+                <button
+                  className="button button-secondary preview-button"
+                  type="button"
                   onClick={() => setPreviewOpen(true)}
                 >
                   <ScanLine size={17} />
@@ -1196,6 +1254,18 @@ export default function App() {
                   </button>
                   {exportMenuOpen && (
                     <div className="export-menu" role="menu">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={pdfExporting}
+                        onClick={() => {
+                          setExportMenuOpen(false)
+                          void handleDownloadDualBookletPdf()
+                        }}
+                      >
+                        <Download size={16} />
+                        <span>A + B Kitapçık PDF indir</span>
+                      </button>
                       <button
                         type="button"
                         role="menuitem"
@@ -1516,6 +1586,7 @@ export default function App() {
                         onToggleOpticalForm={setShowOpticalForm}
                         onShuffleBooklet={handleShuffleBooklet}
                         onDownloadAnswerKeyPdf={handleDownloadAnswerKeyPdf}
+                        onDownloadDualBookletPdf={handleDownloadDualBookletPdf}
                       />
                     ) : (
                       <DesignInspector
@@ -1649,6 +1720,54 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {dualBookletPayload && (
+        <div
+          ref={dualExportRef}
+          className="dual-export-stage"
+          aria-hidden="true"
+        >
+          <ExamPaper
+            examMeta={examMeta}
+            questions={dualBookletPayload.questionsA}
+            selectedQuestionId={null}
+            totalPoints={totalPoints}
+            showAnswerKey
+            showOpticalForm={showOpticalForm}
+            preview
+            design={{ ...design, booklet: "A" }}
+            onSelectQuestion={() => undefined}
+            onSelectExam={() => undefined}
+            onMove={() => undefined}
+            onDuplicate={() => undefined}
+            onDelete={() => undefined}
+          />
+          <ExamPaper
+            examMeta={examMeta}
+            questions={dualBookletPayload.questionsB}
+            selectedQuestionId={null}
+            totalPoints={totalPoints}
+            showAnswerKey
+            showOpticalForm={showOpticalForm}
+            preview
+            design={{ ...design, booklet: "B" }}
+            onSelectQuestion={() => undefined}
+            onSelectExam={() => undefined}
+            onMove={() => undefined}
+            onDuplicate={() => undefined}
+            onDelete={() => undefined}
+          />
+        </div>
+      )}
+
+      <GradingModal
+        open={gradingOpen}
+        examTitle={examMeta.title}
+        questions={questions}
+        grades={grades}
+        onClose={() => setGradingOpen(false)}
+        onChange={setGrades}
+      />
 
       <div
         className={`toast ${toast ? "visible" : ""}`}

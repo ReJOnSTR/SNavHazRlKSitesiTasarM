@@ -25,6 +25,7 @@ import type {
   InfoVariant,
   PaperDesign,
   Question,
+  RubricItem,
 } from "../types/exam"
 import TypeIcon from "./TypeIcon"
 
@@ -731,6 +732,7 @@ export function ExamInspector({
   onToggleOpticalForm,
   onShuffleBooklet,
   onDownloadAnswerKeyPdf,
+  onDownloadDualBookletPdf,
 }: {
   examMeta: ExamMeta
   questions: Question[]
@@ -743,6 +745,7 @@ export function ExamInspector({
   onToggleOpticalForm: (value: boolean) => void
   onShuffleBooklet: (nextBooklet: "A" | "B", shuffleOptions: boolean) => void
   onDownloadAnswerKeyPdf: () => void
+  onDownloadDualBookletPdf?: () => void
 }) {
   const [shuffleOptions, setShuffleOptions] = useState(true)
   const target = examMeta.targetPoints ?? 100
@@ -907,6 +910,17 @@ export function ExamInspector({
             B Kitapçığı üret
           </button>
         </div>
+        {onDownloadDualBookletPdf && (
+          <button
+            className="button button-secondary"
+            style={{ marginTop: 8, width: "100%" }}
+            type="button"
+            onClick={onDownloadDualBookletPdf}
+          >
+            <Download size={14} />
+            A + B Çift Kitapçık PDF İndir
+          </button>
+        )}
       </div>
 
       <ToggleRow
@@ -1323,6 +1337,108 @@ export function QuestionInspector({
           />
         </FormField>
       </div>
+
+      {question.type === "classic" && (
+        <div className="rubric-editor">
+          <div className="rubric-editor-head">
+            <span>Puanlama ölçeği (Rubrik)</span>
+            <button
+              className="button button-ghost button-sm"
+              type="button"
+              onClick={() => {
+                const next: RubricItem[] = [
+                  ...(question.rubric ?? []),
+                  {
+                    id: `rubric-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                    label: "Ölçüt",
+                    points: 5,
+                  },
+                ]
+                onUpdate({ rubric: next })
+              }}
+            >
+              <Plus size={13} />
+              Ölçüt ekle
+            </button>
+          </div>
+          {question.rubric && question.rubric.length > 0 ? (
+            <>
+              <div className="rubric-items">
+                {question.rubric.map((item, idx) => (
+                  <div className="rubric-item-row" key={item.id}>
+                    <input
+                      aria-label={`Ölçüt ${idx + 1}`}
+                      placeholder="Ölçüt açıklaması..."
+                      type="text"
+                      value={item.label}
+                      onChange={(e) => {
+                        const next = (question.rubric ?? []).map((r) =>
+                          r.id === item.id ? { ...r, label: e.target.value } : r,
+                        )
+                        onUpdate({ rubric: next })
+                      }}
+                    />
+                    <input
+                      aria-label={`Ölçüt ${idx + 1} puanı`}
+                      className="rubric-pts-input"
+                      min="0"
+                      type="number"
+                      value={item.points}
+                      onChange={(e) => {
+                        const pts = Math.max(0, Number(e.target.value) || 0)
+                        const next = (question.rubric ?? []).map((r) =>
+                          r.id === item.id ? { ...r, points: pts } : r,
+                        )
+                        onUpdate({ rubric: next })
+                      }}
+                    />
+                    <button
+                      aria-label="Ölçütü sil"
+                      className="icon-button"
+                      type="button"
+                      onClick={() => {
+                        const next = (question.rubric ?? []).filter(
+                          (r) => r.id !== item.id,
+                        )
+                        onUpdate({ rubric: next })
+                      }}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {(() => {
+                const rubricTotal = question.rubric.reduce(
+                  (sum, r) => sum + (Number(r.points) || 0),
+                  0,
+                )
+                return (
+                  <div className="rubric-footer">
+                    <span>
+                      Rubrik toplamı: <strong>{rubricTotal} p</strong>
+                    </span>
+                    {rubricTotal !== question.points && (
+                      <button
+                        className="button button-secondary button-sm"
+                        type="button"
+                        onClick={() => onUpdate({ points: rubricTotal })}
+                      >
+                        Soru puanına eşitle ({rubricTotal})
+                      </button>
+                    )}
+                  </div>
+                )
+              })()}
+            </>
+          ) : (
+            <p className="rubric-empty-hint">
+              Klasik soru için adım bazlı puanlama ölçütü ekleyebilirsiniz; cevap
+              anahtarında otomatik listelenir.
+            </p>
+          )}
+        </div>
+      )}
 
       {onSaveToBank && (
         <button
