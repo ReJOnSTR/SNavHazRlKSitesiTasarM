@@ -16,6 +16,10 @@ import {
 } from "lucide-react"
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from "pdfjs-dist"
 import MathInput, { MathText } from "../MathInput"
+import {
+  normalizeExtractedMath,
+  recognizeQuestionOcr,
+} from "../utils/pdfOcr"
 import { stripPdfWatermarks } from "../utils/pdfWatermarkRemover"
 import type {
   DetectedPdfQuestion,
@@ -46,6 +50,7 @@ type CroppedQuestionItem = {
   figureImage?: string
   figureWidth?: number
   noTextLayer?: boolean
+  ocrLoading?: boolean
 }
 
 type PageTextSample = {
@@ -458,74 +463,63 @@ function formatLineRuns(
   return out.join("").trim()
 }
 
-const SUPERSCRIPT_MAP: Record<string, string> = {
-  "⁰": "0",
-  "¹": "1",
-  "²": "2",
-  "³": "3",
-  "⁴": "4",
-  "⁵": "5",
-  "⁶": "6",
-  "⁷": "7",
-  "⁸": "8",
-  "⁹": "9",
-  "⁺": "+",
-  "⁻": "-",
-  "⁼": "=",
-  "⁽": "(",
-  "⁾": ")",
-  "ⁿ": "n",
-  "ⁱ": "i",
-}
+function mergeStackedFractions(samples: PageTextSample[]): PageTextSample[] {
+  const proseWordRe = /[a-zA-ZçğıöşüÇĞİÖŞÜ]{3,}/
+  const used = new Set<number>()
+  const merged: PageTextSample[] = []
 
-const SUBSCRIPT_MAP: Record<string, string> = {
-  "₀": "0",
-  "₁": "1",
-  "₂": "2",
-  "₃": "3",
-  "₄": "4",
-  "₅": "5",
-  "₆": "6",
-  "₇": "7",
-  "₈": "8",
-  "₉": "9",
-  "₊": "+",
-  "₋": "-",
-  "₌": "=",
-  "₍": "(",
-  "₎": ")",
-}
+  const isShortMath = (s: PageTextSample) =>
+    s.text.length > 0 &&
+    s.text.length <= 10 &&
+    !proseWordRe.test(s.text) &&
+    !/^\(?[A-E]\s*[.):\-]?$/.test(s.text)
 
-function normalizeExtractedMath(raw: string): string {
-  if (!raw) return raw
-  let out = raw
+  for (let i = 0; i < samples.length; i++) {
+    if (used.has(i)) continue
+    const upper = samples[i]
+    if (!isShortMath(upper)) {
+      merged.push(upper)
+      continue
+    }
+    const ucx = (upper.x1 + upper.x2) * 0.5
+    const uw = upper.x2 - upper.x1
+    let bestJ = -1
+    let bestDist = Infinity
 
-  out = out.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ]+/g, (run) => {
-    const mapped = Array.from(run)
-      .map((ch) => SUPERSCRIPT_MAP[ch] ?? ch)
-      .join("")
-    return `^{${mapped}}`
-  })
+    for (let j = 0; j < samples.length; j++) {
+      if (i === j || used.has(j)) continue
+      const lower = samples[j]
+      if (!isShortMath(lower)) continue
+      const dy = lower.y1 - upper.y2
+      const maxGap = Math.max(upper.fontPx, lower.fontPx) * 1.15
+      if (dy < -2 || dy > maxGap) continue
+      const lcx = (lower.x1 + lower.x2) * 0.5
+      const lw = lower.x2 - lower.x1
+      if (Math.abs(ucx - lcx) > Math.max(uw, lw) * 0.65 + 6) continue
+      if (dy < bestDist) {
+        bestDist = dy
+        bestJ = j
+      }
+    }
 
-  out = out.replace(/[₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎]+/g, (run) => {
-    const mapped = Array.from(run)
-      .map((ch) => SUBSCRIPT_MAP[ch] ?? ch)
-      .join("")
-    return `_{${mapped}}`
-  })
-
-  out = out.replace(/√\(([^()]+)\)/g, "√{$1}")
-  out = out.replace(/√([0-9]+|[a-zA-Z])(?![{])/g, "√{$1}")
-
-  out = out.replace(
-    /(^|[\s(=+\-×·])(\d{1,3}|[a-zA-Z])\/(\d{1,3}|[a-zA-Z])(?=$|[\s),.;:?!+\-×·])/g,
-    (full, prefix: string, num: string, den: string) => {
-      if (/^[A-Z]$/.test(num) && /^[A-Z]$/.test(den)) return full
-      return `${prefix}[${num}/${den}]`
-    },
-  )
-
-  return out
+    if (bestJ >= 0) {
+      const lower = samples[bestJ]
+      used.add(i)
+      used.add(bestJ)
+      merged.push({
+        ...upper,
+        x1: Math.min(upper.x1, lower.x1),
+        y1: upper.y1,
+        x2: Math.max(upper.x2, lower.x2),
+        y2: lower.y2,
+        text: `[${upper.text}/${lower.text}]`,
+        fontPx: Math.max(upper.fontPx, lower.fontPx),
+      })
+    } else {
+      merged.push(upper)
+    }
+  }
+  return merged
 }
 
 function analyzeQuestionCrop(
@@ -551,6 +545,7 @@ function analyzeQuestionCrop(
   figureImage?: string
   figureWidth?: number
   noTextLayer?: boolean
+  ocrLoading?: boolean
 } {
   if (insideSamples.length === 0) {
     return { mode: "image", parsedType: "none", prompt: "" }
@@ -562,10 +557,84 @@ function analyzeQuestionCrop(
     h: number
     items: PageTextSample[]
   }
-  const sorted = [...insideSamples].sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1)
+  const sorted = mergeStackedFractions(
+    insideSamples.filter((s) => !s.isRotatedWatermark),
+  ).sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1)
+
+  const markerOnlyRe = /^\(?([A-E])\s*[.):]$/
+  type OptMarker = { letter: string; sample: PageTextSample }
+  const rawMarkers: OptMarker[] = []
+  for (let i = 0; i < sorted.length; i++) {
+    const m = sorted[i].text.trim().match(markerOnlyRe)
+    if (m) rawMarkers.push({ letter: m[1], sample: sorted[i] })
+  }
+  const seqMarkers: OptMarker[] = []
+  for (const mk of rawMarkers) {
+    if (mk.sample.y1 < sy + sh * 0.35) continue
+    const expected = String.fromCharCode(65 + seqMarkers.length)
+    if (mk.letter === expected) seqMarkers.push(mk)
+  }
+
+  const coordConsumed = new Set<PageTextSample>()
+  const coordOptions: string[] = []
+  let coordOptionRows = 0
+  if (seqMarkers.length >= 2) {
+    type MarkerRow = { y1: number; y2: number; items: OptMarker[] }
+    const mRows: MarkerRow[] = []
+    for (const mk of seqMarkers) {
+      const row = mRows.find((r) => Math.abs(r.y1 - mk.sample.y1) <= mk.sample.fontPx * 0.9)
+      if (row) {
+        row.items.push(mk)
+        row.y1 = Math.min(row.y1, mk.sample.y1)
+        row.y2 = Math.max(row.y2, mk.sample.y2)
+      } else {
+        mRows.push({ y1: mk.sample.y1, y2: mk.sample.y2, items: [mk] })
+      }
+    }
+    coordOptionRows = mRows.length
+    for (let rIdx = 0; rIdx < mRows.length; rIdx++) {
+      const row = mRows[rIdx]
+      row.items.sort((a, b) => a.sample.x1 - b.sample.x1)
+      const rowTop = row.y1 - row.items[0].sample.fontPx * 0.8
+      const rowBottom =
+        rIdx + 1 < mRows.length
+          ? mRows[rIdx + 1].y1 - row.items[0].sample.fontPx * 0.5
+          : sy + sh + 4
+      for (let cIdx = 0; cIdx < row.items.length; cIdx++) {
+        const mk = row.items[cIdx]
+        coordConsumed.add(mk.sample)
+        const cellLeft = mk.sample.x2 - 2
+        const cellRight =
+          cIdx + 1 < row.items.length
+            ? row.items[cIdx + 1].sample.x1 - 4
+            : sx + sw + 4
+        const cellItems = sorted
+          .filter(
+            (s) =>
+              s !== mk.sample &&
+              !coordConsumed.has(s) &&
+              s.x1 >= cellLeft - 4 &&
+              s.x2 <= cellRight &&
+              s.y1 >= rowTop &&
+              s.y2 <= rowBottom,
+          )
+          .sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1)
+        for (const ci of cellItems) coordConsumed.add(ci)
+        coordOptions.push(
+          normalizeExtractedMath(cellItems.map((ci) => ci.text).join(" ").trim()),
+        )
+      }
+    }
+  }
+
+  const lineSource =
+    coordOptions.length >= 2
+      ? sorted.filter((s) => !coordConsumed.has(s))
+      : sorted
+
   const lines: LineBucket[] = []
 
-  for (const s of sorted) {
+  for (const s of lineSource) {
     const sCy = (s.y1 + s.y2) * 0.5
     const match = lines.find((line) => {
       const lineCy = (line.y1 + line.y2) * 0.5
@@ -1136,15 +1205,26 @@ function analyzeQuestionCrop(
     joinPreservingSpacing(promptLines, promptBold, promptColor),
   )
 
+  const finalOptions =
+    options.length >= 2
+      ? options
+      : coordOptions.length >= 2
+        ? coordOptions
+        : []
+  if (coordOptions.length >= 2 && options.length < 2) {
+    extractedTextItems.push(...coordConsumed)
+    optionRows = coordOptionRows
+  }
+
   let optionLayout: "inherit" | "grid" | "inline" | "list" | undefined
-  if (options.length >= 2) {
+  if (finalOptions.length >= 2) {
     if (optionRows === 1) optionLayout = "inline"
-    else if (optionRows < options.length) optionLayout = "grid"
+    else if (optionRows < finalOptions.length) optionLayout = "grid"
     else optionLayout = "list"
   }
 
   let parsedType: QuestionKind = "none"
-  if (options.length >= 2) {
+  if (finalOptions.length >= 2) {
     parsedType = "multiple"
   } else if (/doğru\s*\/\s*yanlış|\(D\s*\/\s*Y\)/i.test(prompt)) {
     parsedType = "trueFalse"
@@ -1155,7 +1235,7 @@ function analyzeQuestionCrop(
   }
 
   return {
-    mode: prompt.length > 0 || Boolean(lead) || options.length >= 2 ? "split" : "image",
+    mode: prompt.length > 0 || Boolean(lead) || finalOptions.length >= 2 ? "split" : "image",
     parsedType,
     lead,
     leadBold,
@@ -1166,8 +1246,8 @@ function analyzeQuestionCrop(
     promptBold,
     promptColor,
     options:
-      options.length >= 2
-        ? options.slice(0, 8).map((opt) => normalizeExtractedMath(opt))
+      finalOptions.length >= 2
+        ? finalOptions.slice(0, 8).map((opt) => normalizeExtractedMath(opt))
         : undefined,
     optionLayout,
     figureImage,
@@ -1544,6 +1624,7 @@ export default function PdfImportModal({
     )
 
     const newId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    const noText = insideSamples.length === 0
     setCroppedItems((prev) => [
       ...prev,
       {
@@ -1567,11 +1648,50 @@ export default function PdfImportModal({
         optionLayout: analyzed.optionLayout,
         figureImage: analyzed.figureImage,
         figureWidth: analyzed.figureWidth,
-        noTextLayer: insideSamples.length === 0,
+        noTextLayer: noText,
+        ocrLoading: noText,
       },
     ])
     setEditingItemId(newId)
     setPendingBox(null)
+    if (noText) {
+      void runOcrForItem(newId, dataUrl)
+    }
+  }
+
+  const runOcrForItem = async (itemId: string, imageDataUrl: string) => {
+    setCroppedItems((prev) =>
+      prev.map((entry) =>
+        entry.id === itemId ? { ...entry, ocrLoading: true } : entry,
+      ),
+    )
+    try {
+      const ocr = await recognizeQuestionOcr(imageDataUrl)
+      setCroppedItems((prev) =>
+        prev.map((entry) => {
+          if (entry.id !== itemId) return entry
+          const hasUsefulText =
+            ocr.prompt.length > 0 || (ocr.options?.length ?? 0) >= 2
+          return {
+            ...entry,
+            ocrLoading: false,
+            mode: hasUsefulText ? "split" : entry.mode,
+            parsedType: ocr.parsedType !== "none" ? ocr.parsedType : entry.parsedType,
+            lead: ocr.lead ?? entry.lead,
+            prompt: ocr.prompt || entry.prompt,
+            promptBold: Boolean(ocr.lead || entry.figureImage),
+            options: ocr.options ?? entry.options,
+            optionLayout: ocr.optionLayout ?? entry.optionLayout,
+          }
+        }),
+      )
+    } catch {
+      setCroppedItems((prev) =>
+        prev.map((entry) =>
+          entry.id === itemId ? { ...entry, ocrLoading: false } : entry,
+        ),
+      )
+    }
   }
 
   const handleImportCropped = () => {
@@ -1982,6 +2102,17 @@ export default function PdfImportModal({
                             </small>
                           </span>
                           <div className="pdf-crop-item-actions">
+                            <button
+                              type="button"
+                              className="pdf-mode-toggle-btn"
+                              disabled={Boolean(item.ocrLoading)}
+                              title="Görselden çevrimdışı OCR ile metin ve şıkları oku"
+                              onClick={() =>
+                                void runOcrForItem(item.id, item.fullImage)
+                              }
+                            >
+                              {item.ocrLoading ? "OCR…" : "OCR Oku"}
+                            </button>
                             {item.mode === "split" && (
                               <button
                                 type="button"
